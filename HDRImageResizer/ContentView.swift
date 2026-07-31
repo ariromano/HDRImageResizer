@@ -9,57 +9,100 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ImageIO
 
+import SwiftUI
+import UniformTypeIdentifiers
+import ImageIO
+
 struct ContentView: View {
-	@State private var message = "Drop HEIC"
+	@State private var message:String = "Drop HEIC files here"
+	@State private var overwrite:Bool = false
 
 	var body: some View {
-		VStack {
+		VStack(spacing: 16) {
+
+			Toggle(
+				"Overwrite original files",
+				isOn: $overwrite
+			)
+
 			Text(message)
 				.multilineTextAlignment(.center)
-				.padding()
+
 		}
-		.frame(width: 300, height: 150)
+		.padding()
+		.frame(width: 350, height: 180)
+
 		.onDrop(of: [.fileURL], isTargeted: nil) { providers in
 
 			for provider in providers {
-				provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, error in
+
+				provider.loadItem(
+					forTypeIdentifier: UTType.fileURL.identifier
+				) { item, error in
 
 					guard
 						let data = item as? Data,
-						let sourceURL = URL(dataRepresentation: data, relativeTo: nil)
+						let sourceURL =
+							URL(dataRepresentation: data, relativeTo: nil)
 					else {
-						DispatchQueue.main.async {
-							message = "Could not read dropped file"
-						}
 						return
 					}
 
+
 					do {
-						let outputURL = FileManager.default.homeDirectoryForCurrentUser
-							.appendingPathComponent("Desktop")
-							.appendingPathComponent(
-								sourceURL.deletingPathExtension().lastPathComponent
-								+ ".copy.heic"
+
+						let finalURL: URL
+
+						if overwrite {
+
+							let tempURL =
+								sourceURL
+									.deletingLastPathComponent()
+									.appendingPathComponent(
+										sourceURL.lastPathComponent + ".tmp.heic"
+									)
+
+							try resizeHEIC(
+								from: sourceURL,
+								to: tempURL
 							)
 
-						print("Input:", sourceURL.path)
-						print("Output:", outputURL.path)
+							try FileManager.default.replaceItemAt(
+								sourceURL,
+								withItemAt: tempURL
+							)
 
-						try copyHEIC(
-							from: sourceURL,
-							to: outputURL
-						)
+							finalURL = sourceURL
+
+						} else {
+
+							finalURL =
+								sourceURL
+									.deletingPathExtension()
+									.appendingPathExtension(
+										"x0.5.heic"
+									)
+
+							try resizeHEIC(
+								from: sourceURL,
+								to: finalURL
+							)
+						}
+
 
 						DispatchQueue.main.async {
-							message = "Created:\n\(outputURL.lastPathComponent)"
+							message =
+							"Done:\n\(finalURL.lastPathComponent)"
 						}
+
 
 					} catch {
-						print(error)
 
 						DispatchQueue.main.async {
-							message = "Error:\n\(error.localizedDescription)"
+							message =
+							"Error:\n\(error.localizedDescription)"
 						}
+
 					}
 				}
 			}
@@ -70,14 +113,15 @@ struct ContentView: View {
 }
 
 
-func copyHEIC(from inputURL: URL, to outputURL: URL) throws {
+func resizeHEIC(from inputURL: URL, to outputURL: URL) throws {
 
 	guard let source = CGImageSourceCreateWithURL(
 		inputURL as CFURL,
 		nil
 	) else {
-		throw NSError(domain: "HDRCopy", code: 1)
+		throw NSError(domain: "HDRResize", code: 1)
 	}
+
 
 	guard let destination = CGImageDestinationCreateWithURL(
 		outputURL as CFURL,
@@ -85,23 +129,65 @@ func copyHEIC(from inputURL: URL, to outputURL: URL) throws {
 		1,
 		nil
 	) else {
-		throw NSError(domain: "HDRCopy", code: 2)
+		throw NSError(domain: "HDRResize", code: 2)
 	}
 
 
 	let imageIndex = 0
 
 
-	// (test) copy  main image
-	CGImageDestinationAddImageFromSource(
+	// create a 50% scale version
+	guard let properties =
+			CGImageSourceCopyPropertiesAtIndex(
+				source,
+				imageIndex,
+				nil
+			) as? [CFString: Any],
+		  let width =
+			properties[kCGImagePropertyPixelWidth] as? Int,
+		  let height =
+			properties[kCGImagePropertyPixelHeight] as? Int
+	else {
+		throw NSError(domain: "HDRResize", code: 3)
+	}
+
+
+	let options: [CFString: Any] = [
+		kCGImageSourceCreateThumbnailFromImageAlways: true,
+		kCGImageSourceThumbnailMaxPixelSize:
+			max(width, height) / 2,
+		kCGImageSourceCreateThumbnailWithTransform: true
+	]
+
+
+	guard let thumbnail =
+			CGImageSourceCreateThumbnailAtIndex(
+				source,
+				imageIndex,
+				options as CFDictionary
+			)
+	else {
+		throw NSError(domain: "HDRResize", code: 4)
+	}
+
+
+	// Preserve metadata
+	let metadata =
+		CGImageSourceCopyPropertiesAtIndex(
+			source,
+			imageIndex,
+			nil
+		)
+
+
+	CGImageDestinationAddImage(
 		destination,
-		source,
-		imageIndex,
-		nil
+		thumbnail,
+		metadata ?? [:] as CFDictionary
 	)
 
 
-	// Copy HDR gain map
+	// preserve HDR gain map
 	let auxTypes: [CFString] = [
 		kCGImageAuxiliaryDataTypeHDRGainMap
 	]
@@ -123,14 +209,11 @@ func copyHEIC(from inputURL: URL, to outputURL: URL) throws {
 
 			print("Copied auxiliary data:", type)
 		}
-		else {
-			print("No auxiliary data:", type)
-		}
 	}
 
 
 	guard CGImageDestinationFinalize(destination)
 	else {
-		throw NSError(domain: "HDRCopy", code: 3)
+		throw NSError(domain: "HDRResize", code: 5)
 	}
 }
