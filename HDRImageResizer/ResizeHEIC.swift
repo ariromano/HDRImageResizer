@@ -9,8 +9,8 @@ import ImageIO
 import UniformTypeIdentifiers
 
 
-func resizeHEIC(from inputURL: URL, to outputURL: URL) throws {
-
+func resizeHEIC(from inputURL: URL, to outputURL: URL, scale: CGFloat) throws {
+	
 	guard let source = CGImageSourceCreateWithURL(
 		inputURL as CFURL,
 		nil
@@ -51,7 +51,7 @@ func resizeHEIC(from inputURL: URL, to outputURL: URL) throws {
 	let options: [CFString: Any] = [
 		kCGImageSourceCreateThumbnailFromImageAlways: true,
 		kCGImageSourceThumbnailMaxPixelSize:
-			max(width, height) / 2,
+			Int(CGFloat(max(width, height)) * scale),
 		kCGImageSourceCreateThumbnailWithTransform: true
 	]
 

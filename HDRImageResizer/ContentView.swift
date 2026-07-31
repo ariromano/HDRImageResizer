@@ -8,10 +8,20 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-
 struct ContentView: View {
-	@State private var message:String = "Drop HEIC files here"
-	@State private var overwrite:Bool = false
+
+	@State private var message = "Drop HEIC files here"
+	@State private var overwrite = false
+	@State private var scaleIndex = 1
+
+	let scales: [CGFloat] = [
+		0.25,
+		0.50,
+		0.75	]
+
+	var selectedScale: CGFloat {
+		scales[scaleIndex]
+	}
 
 	var body: some View {
 		VStack(spacing: 16) {
@@ -21,12 +31,41 @@ struct ContentView: View {
 				isOn: $overwrite
 			)
 
+			VStack {
+				Text(
+					"Image size: \(Int(selectedScale * 100))%"
+				)
+
+				Slider(
+					value: Binding(
+						get: {
+							Double(scaleIndex)
+						},
+						set: {
+							scaleIndex = Int($0.rounded())
+						}
+					),
+					in: 0...2,
+					step: 1
+				)
+
+				HStack {
+					Text("25%")
+					Spacer()
+					Text("50%")
+					Spacer()
+					Text("75%")
+				}
+				.font(.caption)
+			}
+
+
 			Text(message)
 				.multilineTextAlignment(.center)
 
 		}
 		.padding()
-		.frame(width: 350, height: 180)
+		.frame(width: 380, height: 230)
 
 		.onDrop(of: [.fileURL], isTargeted: nil) { providers in
 
@@ -47,6 +86,8 @@ struct ContentView: View {
 
 					do {
 
+						let scale = selectedScale
+
 						let finalURL: URL
 
 						if overwrite {
@@ -55,12 +96,14 @@ struct ContentView: View {
 								sourceURL
 									.deletingLastPathComponent()
 									.appendingPathComponent(
-										sourceURL.lastPathComponent + ".tmp.heic"
+										sourceURL.lastPathComponent
+										+ ".tmp.heic"
 									)
 
 							try resizeHEIC(
 								from: sourceURL,
-								to: tempURL
+								to: tempURL,
+								scale: scale
 							)
 
 							try FileManager.default.replaceItemAt(
@@ -72,16 +115,19 @@ struct ContentView: View {
 
 						} else {
 
+							let percentage = Int(selectedScale * 100)
+
 							finalURL =
 								sourceURL
 									.deletingPathExtension()
 									.appendingPathExtension(
-										"x0.5.heic"
+										"x\(percentage).heic"
 									)
 
 							try resizeHEIC(
 								from: sourceURL,
-								to: finalURL
+								to: finalURL,
+								scale: scale
 							)
 						}
 
@@ -91,14 +137,12 @@ struct ContentView: View {
 							"Done:\n\(finalURL.lastPathComponent)"
 						}
 
-
 					} catch {
 
 						DispatchQueue.main.async {
 							message =
 							"Error:\n\(error.localizedDescription)"
 						}
-
 					}
 				}
 			}
