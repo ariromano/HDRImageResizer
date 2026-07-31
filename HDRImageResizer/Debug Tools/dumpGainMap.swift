@@ -54,6 +54,22 @@ for imageIndex in 0..<imageCount {
 		printDictionary(properties)
 	}
 
+	if let image = CGImageSourceCreateImageAtIndex(
+		source,
+		imageIndex,
+		nil
+	) {
+		print("""
+		
+		Decoded CGImage:
+		  width: \(image.width)
+		  height: \(image.height)
+		  bits/component: \(image.bitsPerComponent)
+		  bits/pixel: \(image.bitsPerPixel)
+		  bitmapInfo: \(image.bitmapInfo)
+		  alphaInfo: \(image.alphaInfo)
+		""")
+	}
 
 	if let gainMap =
 		CGImageSourceCopyAuxiliaryDataInfoAtIndex(
