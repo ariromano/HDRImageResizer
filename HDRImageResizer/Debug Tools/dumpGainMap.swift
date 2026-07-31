@@ -2,33 +2,98 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-guard CommandLine.arguments.count > 1 else {
-    print("Usage: dumpGainMap.swift file.heic")
-    exit(1)
+guard CommandLine.arguments.count == 2 else {
+	print("Usage:")
+	print("    swift dumpHEIC.swift image.heic")
+	exit(1)
 }
 
 let url = URL(fileURLWithPath: CommandLine.arguments[1])
 
 guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-    print("Could not open image")
-    exit(1)
+	fatalError("Could not open image")
 }
 
-let index = 0
+let imageCount = CGImageSourceGetCount(source)
 
-if let aux =
-    CGImageSourceCopyAuxiliaryDataInfoAtIndex(
-        source,
-        index,
-        kCGImageAuxiliaryDataTypeHDRGainMap
-    ) as? [CFString: Any]
-{
-    print("HDR gain map found")
+print("Images in container: \(imageCount)")
 
-    for (key, value) in aux {
-        print("\(key): \(value)")
-    }
+func printDictionary(
+	_ dictionary: [CFString: Any],
+	indent: String = ""
+) {
+	for (key, value) in dictionary.sorted(by: {
+		"\($0.key)" < "\($1.key)"
+	}) {
 
-} else {
-    print("No HDR gain map found")
+		print("\(indent)\(key): \(value)")
+
+		if let nested = value as? [CFString: Any] {
+			printDictionary(
+				nested,
+				indent: indent + "  "
+			)
+		}
+	}
+}
+
+
+for imageIndex in 0..<imageCount {
+
+	print("\nImage \(imageIndex)")
+	print("----------------")
+
+	if let properties =
+		CGImageSourceCopyPropertiesAtIndex(
+			source,
+			imageIndex,
+			nil
+		) as? [CFString: Any] {
+
+		
+		printDictionary(properties)
+	}
+
+
+	if let gainMap =
+		CGImageSourceCopyAuxiliaryDataInfoAtIndex(
+			source,
+			imageIndex,
+			kCGImageAuxiliaryDataTypeHDRGainMap
+		) as? [CFString: Any] {
+
+		print("\nHDR Gain Map found!")
+		print("-----------------")
+
+		printDictionary(gainMap)
+
+		if let data =
+			gainMap[kCGImageAuxiliaryDataInfoData] as? Data {
+
+			print("\n Gain map data size: \(data.count) bytes")
+
+			let bytes = [UInt8](data.prefix(64))
+
+			print("First bytes:")
+
+			for (i, byte) in bytes.enumerated() {
+
+				if i % 16 == 0 {
+					print(String(format: "\n%04X: ", i),
+						  terminator: "")
+				}
+
+				print(
+					String(format: "%02X ", byte),
+					terminator: ""
+				)
+			}
+
+			print("\n")
+		}
+
+	} else {
+
+		print("\nNo HDR gain map found")
+	}
 }
