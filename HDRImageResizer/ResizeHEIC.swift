@@ -5,19 +5,59 @@
 //  Created by Ari Romano McBride on 7/31/26.
 //
 
+import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
 
-func resizeHEIC(from inputURL: URL, to outputURL: URL, scale: CGFloat) throws {
-	
+enum HEICResizeError: LocalizedError {
+	case invalidScale(CGFloat)
+	case couldNotOpenSource
+	case couldNotCreateDestination
+	case missingImageDimensions
+	case couldNotCreateThumbnail
+	case couldNotFinalizeDestination
+
+	var errorDescription: String? {
+		switch self {
+		case .invalidScale(let scale):
+			return "Invalid image scale: \(scale)."
+
+		case .couldNotOpenSource:
+			return "Could not open the source HEIC image."
+
+		case .couldNotCreateDestination:
+			return "Could not create the destination HEIC image."
+
+		case .missingImageDimensions:
+			return "Could not read the source image dimensions."
+
+		case .couldNotCreateThumbnail:
+			return "Could not create the resized image."
+
+		case .couldNotFinalizeDestination:
+			return "Could not finish writing the resized HEIC image."
+		}
+	}
+}
+
+
+func resizeHEIC(
+	from inputURL: URL,
+	to outputURL: URL,
+	scale: CGFloat
+) throws {
+
+	guard scale > 0, scale <= 1 else {
+		throw HEICResizeError.invalidScale(scale)
+	}
+
 	guard let source = CGImageSourceCreateWithURL(
 		inputURL as CFURL,
 		nil
 	) else {
-		throw NSError(domain: "HDRResize", code: 1)
+		throw HEICResizeError.couldNotOpenSource
 	}
-
 
 	guard let destination = CGImageDestinationCreateWithURL(
 		outputURL as CFURL,
@@ -25,91 +65,132 @@ func resizeHEIC(from inputURL: URL, to outputURL: URL, scale: CGFloat) throws {
 		1,
 		nil
 	) else {
-		throw NSError(domain: "HDRResize", code: 2)
+		throw HEICResizeError.couldNotCreateDestination
 	}
-
 
 	let imageIndex = 0
 
-
-	// create a 50% scale version
-	guard let properties =
-			CGImageSourceCopyPropertiesAtIndex(
-				source,
-				imageIndex,
-				nil
-			) as? [CFString: Any],
-		  let width =
-			properties[kCGImagePropertyPixelWidth] as? Int,
-		  let height =
-			properties[kCGImagePropertyPixelHeight] as? Int
-	else {
-		throw NSError(domain: "HDRResize", code: 3)
-	}
-
-
-	let options: [CFString: Any] = [
-		kCGImageSourceCreateThumbnailFromImageAlways: true,
-		kCGImageSourceThumbnailMaxPixelSize:
-			Int(CGFloat(max(width, height)) * scale),
-		kCGImageSourceCreateThumbnailWithTransform: true
-	]
-
-
-	guard let thumbnail =
-			CGImageSourceCreateThumbnailAtIndex(
-				source,
-				imageIndex,
-				options as CFDictionary
-			)
-	else {
-		throw NSError(domain: "HDRResize", code: 4)
-	}
-
-
-	// Preserve metadata
-	let metadata =
-		CGImageSourceCopyPropertiesAtIndex(
+	guard
+		let properties = CGImageSourceCopyPropertiesAtIndex(
 			source,
 			imageIndex,
 			nil
-		)
+		) as? [CFString: Any],
+		let width = properties[kCGImagePropertyPixelWidth] as? Int,
+		let height = properties[kCGImagePropertyPixelHeight] as? Int
+	else {
+		throw HEICResizeError.missingImageDimensions
+	}
 
+	let maximumPixelSize = max(
+		1,
+		Int((CGFloat(max(width, height)) * scale).rounded())
+	)
+
+	let thumbnailOptions: [CFString: Any] = [
+		kCGImageSourceCreateThumbnailFromImageAlways: true,
+		kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+		kCGImageSourceCreateThumbnailWithTransform: true
+	]
+
+	guard let resizedImage = CGImageSourceCreateThumbnailAtIndex(
+		source,
+		imageIndex,
+		thumbnailOptions as CFDictionary
+	) else {
+		throw HEICResizeError.couldNotCreateThumbnail
+	}
+
+	var outputProperties = properties
+	outputProperties[kCGImagePropertyPixelWidth] = resizedImage.width
+	outputProperties[kCGImagePropertyPixelHeight] = resizedImage.height
+	outputProperties[kCGImagePropertyOrientation] = 1 	// Orentiation is "baked" because we're re-writing the image anyway
+
+	if var exif = outputProperties[
+		kCGImagePropertyExifDictionary
+	] as? [CFString: Any] {
+		exif[kCGImagePropertyExifPixelXDimension] = resizedImage.width
+		exif[kCGImagePropertyExifPixelYDimension] = resizedImage.height
+		outputProperties[kCGImagePropertyExifDictionary] = exif
+	}
 
 	CGImageDestinationAddImage(
 		destination,
-		thumbnail,
-		metadata ?? [:] as CFDictionary
+		resizedImage,
+		outputProperties as CFDictionary
 	)
 
+	try addResizedAuxiliaryImage(
+		ofType: kCGImageAuxiliaryDataTypeHDRGainMap,
+		from: source,
+		imageIndex: imageIndex,
+		to: destination,
+		scale: scale
+	)
 
-	// preserve HDR gain map
-	let auxTypes: [CFString] = [
-		kCGImageAuxiliaryDataTypeHDRGainMap
-	]
+	guard CGImageDestinationFinalize(destination) else {
+		throw HEICResizeError.couldNotFinalizeDestination
+	}
+}
 
-	for type in auxTypes {
 
-		if let auxInfo =
-			CGImageSourceCopyAuxiliaryDataInfoAtIndex(
-				source,
-				imageIndex,
-				type
-			) {
+// MARK: - Auxiliary images
 
-			CGImageDestinationAddAuxiliaryDataInfo(
-				destination,
-				type,
-				auxInfo
-			)
+private func addResizedAuxiliaryImage(
+	ofType type: CFString,
+	from source: CGImageSource,
+	imageIndex: Int,
+	to destination: CGImageDestination,
+	scale: CGFloat
+) throws {
 
-			print("Copied auxiliary data:", type)
-		}
+	guard let auxiliaryInfo =
+		CGImageSourceCopyAuxiliaryDataInfoAtIndex(
+			source,
+			imageIndex,
+			type
+		)
+	else {
+		return
 	}
 
+	do {
+		let resizedAuxiliaryInfo = try resizeAuxiliaryData(
+			auxiliaryInfo,
+			scale: scale
+		)
 
-	guard CGImageDestinationFinalize(destination)
-	else {
-		throw NSError(domain: "HDRResize", code: 5)
+		CGImageDestinationAddAuxiliaryDataInfo(
+			destination,
+			type,
+			resizedAuxiliaryInfo
+		)
+
+		print(
+			"Resized auxiliary image:",
+			type
+		)
+
+	} catch AuxiliaryResizeError.unsupportedPixelFormat(let pixelFormat) {
+
+		
+		 //Preserve unknown formats unchanged over dropping the auxiliary image and potentially destroying HDR or other data.
+
+		CGImageDestinationAddAuxiliaryDataInfo(
+			destination,
+			type,
+			auxiliaryInfo
+		)
+
+		print(
+			"""
+			Warning: copied auxiliary image without resizing it because \
+			pixel format \(pixelFormat) is unsupported.
+			"""
+		)
+
+	} catch {
+
+		throw error
 	}
 }
