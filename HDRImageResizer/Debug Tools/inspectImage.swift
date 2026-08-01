@@ -25,10 +25,8 @@ func runFFProbe(_ url: URL) {
 	process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
 	process.arguments = [
 		"ffprobe",
-		"-v",
-		"quiet",
-		"-print_format",
-		"json",
+		"-v", "quiet",
+		"-print_format", "json",
 		"-show_streams",
 		"-show_format",
 		url.path
@@ -42,11 +40,6 @@ func runFFProbe(_ url: URL) {
 		print("""
 		
 		Error: ffprobe was not found.
-
-		Install FFmpeg, for example:
-			brew install ffmpeg
-		
-		or make sure ffprobe is available in your PATH.
 		""")
 		return
 	}
@@ -54,85 +47,144 @@ func runFFProbe(_ url: URL) {
 	let data = pipe.fileHandleForReading.readDataToEndOfFile()
 
 	guard
-		let json = try? JSONSerialization.jsonObject(
-			with: data
-		) as? [String: Any]
+		let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
 	else {
 		print("Could not parse ffprobe JSON")
 		return
 	}
 
-
 	if let format = json["format"] as? [String: Any],
-	   let brands = format["tags"] as? [String: Any] {
+	   let tags = format["tags"] as? [String: Any],
+	   let brands = tags["compatible_brands"] {
 
-		if let compatible = brands["compatible_brands"] {
-			print("HEIF brands:")
-			print("  \(compatible)")
+		print("HEIF brands:")
+		print("  \(brands)")
 
-			if "\(compatible)".contains("tmap") {
-				print("  ⚠ HEIF tone map (tmap) item detected")
-			}
+		if "\(brands)".contains("tmap") {
+			print(" HEIF tone map (tmap) item detected")
 		}
 	}
 
-
-	guard let streams = json["streams"] as? [[String: Any]]
-	else {
+	guard let streams = json["streams"] as? [[String: Any]] else {
 		return
 	}
 
+	struct Group {
+		var count = 0
+		var codec = ""
+		var profile = ""
+		var pixFmt = ""
+		var sampling = ""
+		var depth = ""
+		var width = 0
+		var height = 0
+		var range = ""
+		var primaries = ""
+		var transfer = ""
+		var matrix = ""
+	}
 
-	for (index, stream) in streams.enumerated() {
+	var groups: [String: Group] = [:]
 
-		guard
-			let codec = stream["codec_name"] as? String
-		else {
-			continue
+	for stream in streams {
+
+		let codec = stream["codec_name"] as? String ?? "?"
+		let profile = stream["profile"] as? String ?? ""
+		let pixFmt = stream["pix_fmt"] as? String ?? "?"
+
+		let width = stream["width"] as? Int ?? 0
+		let height = stream["height"] as? Int ?? 0
+
+		let desc = describePixelFormat(pixFmt)
+
+		let key = "\(codec)|\(pixFmt)|\(width)x\(height)"
+
+		if groups[key] == nil {
+
+			groups[key] = Group(
+				count: 0,
+				codec: codec,
+				profile: profile,
+				pixFmt: pixFmt,
+				sampling: desc.sampling,
+				depth: desc.depth,
+				width: width,
+				height: height,
+				range: stream["color_range"] as? String ?? "",
+				primaries: stream["color_primaries"] as? String ?? "",
+				transfer: stream["color_transfer"] as? String ?? "",
+				matrix: stream["color_space"] as? String ?? ""
+			)
 		}
 
-		print("\nStream \(index)")
-		print("-----------")
-		print("Codec:          \(codec)")
+		groups[key]!.count += 1
+	}
 
-		if let profile = stream["profile"] {
-			print("Profile:        \(profile)")
+	func printGroup(_ title: String, _ group: Group) {
+
+		print("\n\(title)")
+		print(String(repeating: "-", count: title.count))
+
+		print("Count:          \(group.count)")
+		print("Codec:          \(group.codec)")
+		print("Profile:        \(group.profile)")
+		print("Resolution:     \(group.width) × \(group.height)")
+		print("Pixel format:   \(group.pixFmt)")
+		print("Sampling:       \(group.sampling)")
+		print("Bit depth:      \(group.depth)")
+
+		if !group.range.isEmpty {
+			print("Range:          \(group.range)")
 		}
 
-		if let pixFmt = stream["pix_fmt"] as? String {
-
-			print("Pixel format:   \(pixFmt)")
-
-			let description = describePixelFormat(pixFmt)
-
-			print("Sampling:       \(description.sampling)")
-			print("Bit depth:      \(description.depth)")
+		if !group.primaries.isEmpty {
+			print("Primaries:      \(group.primaries)")
 		}
 
-		if let value = stream["color_range"] {
-			print("Range:          \(value)")
+		if !group.transfer.isEmpty {
+			print("Transfer:       \(group.transfer)")
 		}
 
-		if let value = stream["color_primaries"] {
-			print("Primaries:      \(value)")
+		if !group.matrix.isEmpty {
+			print("Matrix:         \(group.matrix)")
+		}
+	}
+
+	// Largest colour image(s)
+	let colourGroups = groups.values
+		.filter { !$0.pixFmt.contains("gray") }
+		.sorted {
+			($0.width * $0.height) >
+			($1.width * $1.height)
 		}
 
-		if let value = stream["color_transfer"] {
-			print("Transfer:       \(value)")
+	if let primary = colourGroups.first {
+		printGroup("Primary image tiles", primary)
+	}
+
+	// Remaining colour images
+	if colourGroups.count > 1 {
+
+		for group in colourGroups.dropFirst() {
+			printGroup("Other colour images", group)
+		}
+	}
+
+	// Grayscale images
+	let grayGroups = groups.values
+		.filter { $0.pixFmt.contains("gray") }
+		.sorted {
+			($0.width * $0.height) >
+			($1.width * $1.height)
 		}
 
-		if let value = stream["color_space"] {
-			print("Matrix:         \(value)")
-		}
+	if !grayGroups.isEmpty {
 
-		if let width = stream["width"],
-		   let height = stream["height"] {
-
-			print("Resolution:     \(width) × \(height)")
+		for group in grayGroups {
+			printGroup("Grayscale auxiliary images", group)
 		}
 	}
 }
-
 
 func describePixelFormat(
 	_ format: String
