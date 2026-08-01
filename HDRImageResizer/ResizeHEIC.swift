@@ -5,7 +5,6 @@
 //  Created by Ari Romano McBride on 7/31/26.
 //
 
-
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -47,12 +46,18 @@ func resizeHEIC(
 	from inputURL: URL,
 	to outputURL: URL,
 	scale: CGFloat,
-	auxiliaryOptions: [AuxiliaryMapOption]
+	auxiliaryOptions: [AuxiliaryMapOption],
+	previewDirectory: URL
 ) throws -> HEICResizeResult {
 
 	guard scale > 0, scale <= 1 else {
 		throw HEICResizeError.invalidScale(scale)
 	}
+
+	try FileManager.default.createDirectory(
+		at: previewDirectory,
+		withIntermediateDirectories: true
+	)
 
 	guard let source = CGImageSourceCreateWithURL(
 		inputURL as CFURL,
@@ -78,14 +83,12 @@ func resizeHEIC(
 			imageIndex,
 			nil
 		) as? [CFString: Any],
-		let width =
-			numberAsInt(
-				properties[kCGImagePropertyPixelWidth]
-			),
-		let height =
-			numberAsInt(
-				properties[kCGImagePropertyPixelHeight]
-			)
+		let width = integerValue(
+			properties[kCGImagePropertyPixelWidth]
+		),
+		let height = integerValue(
+			properties[kCGImagePropertyPixelHeight]
+		)
 	else {
 		throw HEICResizeError.missingImageDimensions
 	}
@@ -134,21 +137,17 @@ func resizeHEIC(
 	outputProperties[kCGImagePropertyPixelHeight] =
 		resizedImage.height
 
+	/*
+	 CGImageSourceCreateThumbnailWithTransform applies the source
+	 orientation to the pixels, so the output orientation is normal.
+	 */
 	outputProperties[kCGImagePropertyOrientation] = 1
 
-	if var exif = outputProperties[
-		kCGImagePropertyExifDictionary
-	] as? [CFString: Any] {
-
-		exif[kCGImagePropertyExifPixelXDimension] =
-			resizedImage.width
-
-		exif[kCGImagePropertyExifPixelYDimension] =
-			resizedImage.height
-
-		outputProperties[kCGImagePropertyExifDictionary] =
-			exif
-	}
+	updateExifDimensions(
+		in: &outputProperties,
+		width: resizedImage.width,
+		height: resizedImage.height
+	)
 
 	CGImageDestinationAddImage(
 		destination,
@@ -165,7 +164,8 @@ func resizeHEIC(
 				option,
 				from: source,
 				imageIndex: imageIndex,
-				to: destination
+				to: destination,
+				previewDirectory: previewDirectory
 			)
 	}
 
@@ -177,6 +177,9 @@ func resizeHEIC(
 		fileName: inputURL.lastPathComponent,
 		mainImageOriginal: originalDimensions,
 		mainImageOutput: outputDimensions,
+		mainImagePreview: ImagePreview(
+			url: outputURL
+		),
 		auxiliaryResults: auxiliaryResults
 	)
 }
@@ -188,7 +191,8 @@ private func processAuxiliaryImage(
 	_ option: AuxiliaryMapOption,
 	from source: CGImageSource,
 	imageIndex: Int,
-	to destination: CGImageDestination
+	to destination: CGImageDestination,
+	previewDirectory: URL
 ) throws -> AuxiliaryMapResult {
 
 	let type = option.kind.imageIOType
@@ -205,10 +209,15 @@ private func processAuxiliaryImage(
 
 	let originalDimensions =
 		auxiliaryDimensions(from: auxiliaryInfo)
-		?? PixelDimensions(width: 0, height: 0)
+		?? PixelDimensions(
+			width: 0,
+			height: 0
+		)
 
 	guard option.isEnabled else {
-		print("Discarded \(option.kind.displayName)")
+		print(
+			"Discarded \(option.kind.displayName)"
+		)
 
 		return .discarded(
 			original: originalDimensions
@@ -227,6 +236,16 @@ private func processAuxiliaryImage(
 			resized.auxiliaryInfo
 		)
 
+		let previewURL = makeAuxiliaryPreviewURL(
+			for: option.kind,
+			in: previewDirectory
+		)
+
+		let preview = createAuxiliaryPreview(
+			from: resized.auxiliaryInfo,
+			at: previewURL
+		)
+
 		print(
 			"""
 			Resized \(option.kind.displayName): \
@@ -237,16 +256,31 @@ private func processAuxiliaryImage(
 
 		return .resized(
 			original: resized.originalDimensions,
-			output: resized.outputDimensions
+			output: resized.outputDimensions,
+			preview: preview
 		)
 
 	} catch AuxiliaryResizeError
 		.unsupportedPixelFormat(let pixelFormat) {
 
+		/*
+		 Preserve unknown formats unchanged rather than removing
+		 potentially important auxiliary image data.
+		 */
 		CGImageDestinationAddAuxiliaryDataInfo(
 			destination,
 			type,
 			auxiliaryInfo
+		)
+
+		let previewURL = makeAuxiliaryPreviewURL(
+			for: option.kind,
+			in: previewDirectory
+		)
+
+		let preview = createAuxiliaryPreview(
+			from: auxiliaryInfo,
+			at: previewURL
 		)
 
 		let reason =
@@ -261,7 +295,8 @@ private func processAuxiliaryImage(
 
 		return .retainedUnchanged(
 			original: originalDimensions,
-			reason: reason
+			reason: reason,
+			preview: preview
 		)
 
 	} catch {
@@ -270,9 +305,82 @@ private func processAuxiliaryImage(
 }
 
 
-// MARK: - Helpers
+// MARK: - Preview generation
 
-private func numberAsInt(
+private func makeAuxiliaryPreviewURL(
+	for kind: AuxiliaryMapKind,
+	in directory: URL
+) -> URL {
+
+	directory.appendingPathComponent(
+		"\(kind.rawValue).png"
+	)
+}
+
+
+private func createAuxiliaryPreview(
+	from auxiliaryInfo: CFDictionary,
+	at outputURL: URL
+) -> ImagePreview {
+
+	do {
+		try writeAuxiliaryPreviewPNG(
+			auxiliaryInfo,
+			to: outputURL
+		)
+
+		return ImagePreview(
+			url: outputURL
+		)
+
+	} catch {
+		/*
+		 Preview generation is optional and must not cause an otherwise
+		 valid HEIC resize operation to fail.
+		 */
+		print(
+			"""
+			Warning: could not create auxiliary preview \
+			\(outputURL.lastPathComponent): \
+			\(error.localizedDescription)
+			"""
+		)
+
+		return ImagePreview(url: nil)
+	}
+}
+
+
+// MARK: - Metadata
+
+private func updateExifDimensions(
+	in properties: inout [CFString: Any],
+	width: Int,
+	height: Int
+) {
+
+	guard var exif =
+		properties[
+			kCGImagePropertyExifDictionary
+		] as? [CFString: Any]
+	else {
+		return
+	}
+
+	exif[kCGImagePropertyExifPixelXDimension] =
+		width
+
+	exif[kCGImagePropertyExifPixelYDimension] =
+		height
+
+	properties[kCGImagePropertyExifDictionary] =
+		exif
+}
+
+
+// MARK: - Value parsing
+
+private func integerValue(
 	_ value: Any?
 ) -> Int? {
 

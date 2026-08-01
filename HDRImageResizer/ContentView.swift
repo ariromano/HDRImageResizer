@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 
 struct ContentView: View {
@@ -33,6 +34,7 @@ struct ContentView: View {
 		imageScales[imageScaleIndex]
 	}
 
+
 	var body: some View {
 		VStack(alignment: .leading, spacing: 18) {
 
@@ -43,13 +45,7 @@ struct ContentView: View {
 
 			Divider()
 
-			scaleControl(
-				title: "Main image",
-				status: lastResult?
-					.mainImageSummary,
-				index: $imageScaleIndex,
-				scales: imageScales
-			)
+			mainImageControl
 
 			Divider()
 
@@ -64,11 +60,14 @@ struct ContentView: View {
 						.font(.caption)
 						.foregroundStyle(.secondary)
 						.lineLimit(1)
+						.truncationMode(.middle)
 				}
 			}
 
 			VStack(spacing: 14) {
-				ForEach($auxiliaryMaps) { $option in
+				ForEach($auxiliaryMaps) {
+					$option in
+
 					auxiliaryMapControl(
 						option: $option
 					)
@@ -83,7 +82,7 @@ struct ContentView: View {
 				.foregroundStyle(.secondary)
 		}
 		.padding(20)
-		.frame(width: 650)
+		.frame(width: 680)
 		.onDrop(
 			of: [.fileURL],
 			isTargeted: nil,
@@ -92,46 +91,45 @@ struct ContentView: View {
 	}
 
 
-	// MARK: - Main image control
+	// MARK: - Main image
 
-	@ViewBuilder
-	private func scaleControl(
-		title: String,
-		status: String?,
-		index: Binding<Int>,
-		scales: [CGFloat]
-	) -> some View {
-
-		let selectedScale =
-			scales[index.wrappedValue]
-
+	private var mainImageControl: some View {
 		VStack(alignment: .leading, spacing: 6) {
+
 			HStack {
 				Text(
-					"\(title): "
-					+ "\(Int(selectedScale * 100))%"
+					"Main image: "
+					+ "\(Int(selectedImageScale * 100))%"
 				)
 
 				Spacer()
 
-				resultText(status)
+				previewButton(
+					lastResult?.mainImagePreview
+				)
+
+				resultText(
+					lastResult?.mainImageSummary
+				)
 			}
 
 			Slider(
 				value: Binding(
 					get: {
-						Double(index.wrappedValue)
+						Double(imageScaleIndex)
 					},
 					set: {
-						index.wrappedValue =
+						imageScaleIndex =
 							Int($0.rounded())
 					}
 				),
-				in: 0...Double(scales.count - 1),
+				in: 0...Double(
+					imageScales.count - 1
+				),
 				step: 1
 			)
 
-			scaleLabels(scales)
+			scaleLabels(imageScales)
 		}
 	}
 
@@ -143,31 +141,45 @@ struct ContentView: View {
 		option: Binding<AuxiliaryMapOption>
 	) -> some View {
 
-		let result = lastResult?
-			.result(for: option.wrappedValue.kind)
+		let kind =
+			option.wrappedValue.kind
+
+		let result =
+			lastResult?.result(for: kind)
 
 		VStack(alignment: .leading, spacing: 6) {
+
 			HStack {
 				Toggle(
-					option.wrappedValue.kind.displayName,
+					kind.displayName,
 					isOn: option.isEnabled
 				)
 
 				Spacer()
 
-				resultText(result?.summary)
+				previewButton(
+					result?.preview
+				)
+
+				resultText(
+					result?.summary
+				)
 
 				if option.wrappedValue.isEnabled {
 					Text(
 						"""
 						\(Int(
-							option.wrappedValue.scale * 100
+							option.wrappedValue
+								.scale * 100
 						))%
 						"""
 					)
 					.monospacedDigit()
 					.foregroundStyle(.secondary)
-					.frame(width: 42, alignment: .trailing)
+					.frame(
+						width: 42,
+						alignment: .trailing
+					)
 				}
 			}
 
@@ -195,12 +207,36 @@ struct ContentView: View {
 				)
 
 				scaleLabels(
-					AuxiliaryMapOption.availableScales
+					AuxiliaryMapOption
+						.availableScales
 				)
 			}
 		}
 	}
 
+
+	// MARK: - Preview buttons
+
+	@ViewBuilder
+	private func previewButton(
+		_ preview: ImagePreview?
+	) -> some View {
+
+		if let url = preview?.url {
+			Button {
+				NSWorkspace.shared.open(url)
+			} label: {
+				Image(systemName: "photo")
+			}
+			.buttonStyle(.borderless)
+			.help(
+				"Open \(url.lastPathComponent)"
+			)
+		}
+	}
+
+
+	// MARK: - Result text
 
 	@ViewBuilder
 	private func resultText(
@@ -213,9 +249,15 @@ struct ContentView: View {
 				.monospacedDigit()
 				.foregroundStyle(.secondary)
 				.lineLimit(1)
+				.frame(
+					minWidth: 190,
+					alignment: .trailing
+				)
 		}
 	}
 
+
+	// MARK: - Scale labels
 
 	private func scaleLabels(
 		_ scales: [CGFloat]
@@ -227,7 +269,9 @@ struct ContentView: View {
 				id: \.offset
 			) { index, scale in
 
-				Text("\(Int(scale * 100))%")
+				Text(
+					"\(Int(scale * 100))%"
+				)
 
 				if index < scales.count - 1 {
 					Spacer()
@@ -245,8 +289,11 @@ struct ContentView: View {
 		_ providers: [NSItemProvider]
 	) -> Bool {
 
-		let imageScale = selectedImageScale
-		let overwriteOriginals = overwrite
+		let imageScale =
+			selectedImageScale
+
+		let overwriteOriginals =
+			overwrite
 
 		let capturedAuxiliaryOptions =
 			auxiliaryMaps
@@ -259,7 +306,8 @@ struct ContentView: View {
 
 				if let error {
 					updateMessage(
-						"Error:\n\(error.localizedDescription)"
+						"Error:\n"
+						+ error.localizedDescription
 					)
 					return
 				}
@@ -272,12 +320,18 @@ struct ContentView: View {
 					)
 				else {
 					updateMessage(
-						"Error:\nCould not read dropped file."
+						"""
+						Error:
+						Could not read dropped file.
+						"""
 					)
 					return
 				}
 
 				do {
+					let previewDirectory =
+						makePreviewDirectory()
+
 					let finalURL: URL
 					let result: HEICResizeResult
 
@@ -292,7 +346,9 @@ struct ContentView: View {
 							to: temporaryURL,
 							scale: imageScale,
 							auxiliaryOptions:
-								capturedAuxiliaryOptions
+								capturedAuxiliaryOptions,
+							previewDirectory:
+								previewDirectory
 						)
 
 						try FileManager.default
@@ -315,18 +371,27 @@ struct ContentView: View {
 							to: finalURL,
 							scale: imageScale,
 							auxiliaryOptions:
-								capturedAuxiliaryOptions
+								capturedAuxiliaryOptions,
+							previewDirectory:
+								previewDirectory
 						)
 					}
 
+					let displayedResult =
+						result
+							.replacingMainImagePreview(
+								with: finalURL
+							)
+
 					updateResult(
-						result,
+						displayedResult,
 						outputURL: finalURL
 					)
 
 				} catch {
 					updateMessage(
-						"Error:\n\(error.localizedDescription)"
+						"Error:\n"
+						+ error.localizedDescription
 					)
 				}
 			}
@@ -336,15 +401,19 @@ struct ContentView: View {
 	}
 
 
+	// MARK: - URLs
+
 	private func makeOutputURL(
 		for sourceURL: URL,
 		scale: CGFloat
 	) -> URL {
 
-		let percentage = Int(scale * 100)
+		let percentage =
+			Int(scale * 100)
 
 		let baseName =
-			sourceURL.deletingPathExtension()
+			sourceURL
+				.deletingPathExtension()
 				.lastPathComponent
 
 		return sourceURL
@@ -367,14 +436,33 @@ struct ContentView: View {
 	}
 
 
+	private func makePreviewDirectory() -> URL {
+
+		FileManager.default
+			.temporaryDirectory
+			.appendingPathComponent(
+				"HDRImageResizer",
+				isDirectory: true
+			)
+			.appendingPathComponent(
+				UUID().uuidString,
+				isDirectory: true
+			)
+	}
+
+
+	// MARK: - UI updates
+
 	private func updateResult(
 		_ result: HEICResizeResult,
 		outputURL: URL
 	) {
 		DispatchQueue.main.async {
 			lastResult = result
+
 			message =
-				"Created \(outputURL.lastPathComponent)"
+				"Created "
+				+ outputURL.lastPathComponent
 		}
 	}
 
