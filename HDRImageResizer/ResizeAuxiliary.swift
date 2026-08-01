@@ -5,10 +5,24 @@
 //  Created by Ari Romano McBride on 8/1/26.
 //
 
+//
+//  ResizeAuxiliary.swift
+//  HDRImageResizer
+//
+//  Created by Ari Romano McBride on 8/1/26.
+//
+
 import Foundation
 import Accelerate
 import ImageIO
 import CoreGraphics
+
+
+struct ResizedAuxiliaryData {
+	let auxiliaryInfo: CFDictionary
+	let originalDimensions: PixelDimensions
+	let outputDimensions: PixelDimensions
+}
 
 
 enum AuxiliaryResizeError: LocalizedError {
@@ -60,10 +74,16 @@ enum AuxiliaryResizeError: LocalizedError {
 			"""
 
 		case .invalidDataAlignment(let format):
-			return "The auxiliary-image data is not correctly aligned for \(format)."
+			return """
+			The auxiliary-image data is not correctly aligned \
+			for \(format).
+			"""
 
 		case .resizeFailed(let error):
-			return "vImage failed to resize the auxiliary image. Error: \(error)."
+			return """
+			vImage failed to resize the auxiliary image. \
+			Error: \(error).
+			"""
 		}
 	}
 }
@@ -81,7 +101,7 @@ enum AuxiliaryResizeError: LocalizedError {
 func resizeAuxiliaryData(
 	_ auxiliaryInfo: CFDictionary,
 	scale: CGFloat
-) throws -> CFDictionary {
+) throws -> ResizedAuxiliaryData {
 
 	guard scale > 0 else {
 		throw AuxiliaryResizeError.invalidScale(scale)
@@ -139,7 +159,8 @@ func resizeAuxiliaryData(
 		)
 	}
 
-	let requiredSourceBytes = sourceBytesPerRow * height
+	let requiredSourceBytes =
+		sourceBytesPerRow * height
 
 	guard sourceData.count >= requiredSourceBytes else {
 		throw AuxiliaryResizeError.insufficientData(
@@ -150,12 +171,18 @@ func resizeAuxiliaryData(
 
 	let destinationWidth = max(
 		1,
-		Int((CGFloat(width) * scale).rounded())
+		Int(
+			(CGFloat(width) * scale)
+				.rounded()
+		)
 	)
 
 	let destinationHeight = max(
 		1,
-		Int((CGFloat(height) * scale).rounded())
+		Int(
+			(CGFloat(height) * scale)
+				.rounded()
+		)
 	)
 
 	guard let format = AuxiliaryPixelFormat(pixelFormat) else {
@@ -172,7 +199,11 @@ func resizeAuxiliaryData(
 		)
 	}
 
-	guard sourceBytesPerRow.isMultiple(of: format.byteAlignment) else {
+	guard
+		sourceBytesPerRow.isMultiple(
+			of: format.byteAlignment
+		)
+	else {
 		throw AuxiliaryResizeError.invalidDataAlignment(
 			format: format.name
 		)
@@ -188,19 +219,70 @@ func resizeAuxiliaryData(
 		sourceBytesPerRow: sourceBytesPerRow,
 		destinationWidth: destinationWidth,
 		destinationHeight: destinationHeight,
-		destinationBytesPerRow: destinationBytesPerRow,
+		destinationBytesPerRow:
+			destinationBytesPerRow,
 		alignment: format.byteAlignment,
 		scaleOperation: format.scaleOperation
 	)
 
-	description[auxiliaryWidthKey] = destinationWidth
-	description[auxiliaryHeightKey] = destinationHeight
-	description[auxiliaryBytesPerRowKey] = destinationBytesPerRow
+	description[auxiliaryWidthKey] =
+		destinationWidth
 
-	info[kCGImageAuxiliaryDataInfoData] = resizedData
-	info[kCGImageAuxiliaryDataInfoDataDescription] = description
+	description[auxiliaryHeightKey] =
+		destinationHeight
 
-	return info as CFDictionary
+	description[auxiliaryBytesPerRowKey] =
+		destinationBytesPerRow
+
+	info[kCGImageAuxiliaryDataInfoData] =
+		resizedData
+
+	info[kCGImageAuxiliaryDataInfoDataDescription] =
+		description
+
+	return ResizedAuxiliaryData(
+		auxiliaryInfo: info as CFDictionary,
+		originalDimensions: PixelDimensions(
+			width: width,
+			height: height
+		),
+		outputDimensions: PixelDimensions(
+			width: destinationWidth,
+			height: destinationHeight
+		)
+	)
+}
+
+
+/// Returns the dimensions stored in an ImageIO auxiliary-data dictionary.
+///
+/// Returns `nil` when the dictionary does not contain readable width and
+/// height values.
+func auxiliaryDimensions(
+	from auxiliaryInfo: CFDictionary
+) -> PixelDimensions? {
+
+	guard
+		let info =
+			auxiliaryInfo as? [CFString: Any],
+		let description =
+			info[
+				kCGImageAuxiliaryDataInfoDataDescription
+			] as? [CFString: Any],
+		let width = optionalIntegerValue(
+			description[auxiliaryWidthKey]
+		),
+		let height = optionalIntegerValue(
+			description[auxiliaryHeightKey]
+		)
+	else {
+		return nil
+	}
+
+	return PixelDimensions(
+		width: width,
+		height: height
+	)
 }
 
 
@@ -233,56 +315,51 @@ private struct AuxiliaryPixelFormat {
 
 
 	init?(_ fourCC: UInt32) {
-
 		switch fourCC {
-
 		case fourCharacterCode("L008"):
-
 			self = Self.planar(
 				name: "L008",
 				component: UInt8.self
 			) { source, destination in
-
 				vImageScale_Planar8(
 					&source,
 					&destination,
 					nil,
-					vImage_Flags(kvImageHighQualityResampling)
+					vImage_Flags(
+						kvImageHighQualityResampling
+					)
 				)
 			}
 
-
 		case fourCharacterCode("L016"):
-
 			self = Self.planar(
 				name: "L016",
 				component: UInt16.self
 			) { source, destination in
-
 				vImageScale_Planar16U(
 					&source,
 					&destination,
 					nil,
-					vImage_Flags(kvImageHighQualityResampling)
+					vImage_Flags(
+						kvImageHighQualityResampling
+					)
 				)
 			}
 
-
 		case fourCharacterCode("Lf32"):
-
 			self = Self.planar(
 				name: "Lf32",
 				component: Float.self
 			) { source, destination in
-
 				vImageScale_PlanarF(
 					&source,
 					&destination,
 					nil,
-					vImage_Flags(kvImageHighQualityResampling)
+					vImage_Flags(
+						kvImageHighQualityResampling
+					)
 				)
 			}
-
 
 		default:
 			return nil
@@ -298,8 +375,10 @@ private struct AuxiliaryPixelFormat {
 
 		Self(
 			name: name,
-			bytesPerPixel: MemoryLayout<Component>.size,
-			byteAlignment: MemoryLayout<Component>.alignment,
+			bytesPerPixel:
+				MemoryLayout<Component>.size,
+			byteAlignment:
+				MemoryLayout<Component>.alignment,
 			scaleOperation: scaleOperation
 		)
 	}
@@ -317,24 +396,28 @@ private func resizeBuffer(
 	destinationHeight: Int,
 	destinationBytesPerRow: Int,
 	alignment: Int,
-	scaleOperation: AuxiliaryPixelFormat.ScaleOperation
+	scaleOperation:
+		AuxiliaryPixelFormat.ScaleOperation
 ) throws -> Data {
 
 	let sourceByteCount =
 		sourceBytesPerRow * sourceHeight
 
 	let destinationByteCount =
-		destinationBytesPerRow * destinationHeight
+		destinationBytesPerRow
+		* destinationHeight
 
-	let sourcePointer = UnsafeMutableRawPointer.allocate(
-		byteCount: sourceByteCount,
-		alignment: alignment
-	)
+	let sourcePointer =
+		UnsafeMutableRawPointer.allocate(
+			byteCount: sourceByteCount,
+			alignment: alignment
+		)
 
-	let destinationPointer = UnsafeMutableRawPointer.allocate(
-		byteCount: destinationByteCount,
-		alignment: alignment
-	)
+	let destinationPointer =
+		UnsafeMutableRawPointer.allocate(
+			byteCount: destinationByteCount,
+			alignment: alignment
+		)
 
 	defer {
 		sourcePointer.deallocate()
@@ -342,7 +425,8 @@ private func resizeBuffer(
 	}
 
 	sourceData.copyBytes(
-		to: sourcePointer.assumingMemoryBound(to: UInt8.self),
+		to: sourcePointer
+			.assumingMemoryBound(to: UInt8.self),
 		count: sourceByteCount
 	)
 
@@ -372,7 +456,9 @@ private func resizeBuffer(
 	)
 
 	guard result == kvImageNoError else {
-		throw AuxiliaryResizeError.resizeFailed(result)
+		throw AuxiliaryResizeError.resizeFailed(
+			result
+		)
 	}
 
 	return Data(
@@ -402,17 +488,32 @@ private func integerValue(
 	key: CFString
 ) throws -> Int {
 
-	if let value = dictionary[key] as? Int {
+	if let value = optionalIntegerValue(
+		dictionary[key]
+	) {
 		return value
 	}
 
-	if let value = dictionary[key] as? NSNumber {
+	throw AuxiliaryResizeError
+		.missingDescriptionValue(
+			key as String
+		)
+}
+
+
+private func optionalIntegerValue(
+	_ value: Any?
+) -> Int? {
+
+	if let value = value as? Int {
+		return value
+	}
+
+	if let value = value as? NSNumber {
 		return value.intValue
 	}
 
-	throw AuxiliaryResizeError.missingDescriptionValue(
-		key as String
-	)
+	return nil
 }
 
 
@@ -426,16 +527,19 @@ private func pixelFormatValue(
 	}
 
 	if let value = dictionary[key] as? Int {
-		return UInt32(truncatingIfNeeded: value)
+		return UInt32(
+			truncatingIfNeeded: value
+		)
 	}
 
 	if let value = dictionary[key] as? NSNumber {
 		return value.uint32Value
 	}
 
-	throw AuxiliaryResizeError.missingDescriptionValue(
-		key as String
-	)
+	throw AuxiliaryResizeError
+		.missingDescriptionValue(
+			key as String
+		)
 }
 
 

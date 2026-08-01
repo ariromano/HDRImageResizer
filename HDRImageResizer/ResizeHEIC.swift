@@ -5,6 +5,7 @@
 //  Created by Ari Romano McBride on 7/31/26.
 //
 
+
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -47,7 +48,7 @@ func resizeHEIC(
 	to outputURL: URL,
 	scale: CGFloat,
 	auxiliaryOptions: [AuxiliaryMapOption]
-) throws {
+) throws -> HEICResizeResult {
 
 	guard scale > 0, scale <= 1 else {
 		throw HEICResizeError.invalidScale(scale)
@@ -77,11 +78,22 @@ func resizeHEIC(
 			imageIndex,
 			nil
 		) as? [CFString: Any],
-		let width = properties[kCGImagePropertyPixelWidth] as? Int,
-		let height = properties[kCGImagePropertyPixelHeight] as? Int
+		let width =
+			numberAsInt(
+				properties[kCGImagePropertyPixelWidth]
+			),
+		let height =
+			numberAsInt(
+				properties[kCGImagePropertyPixelHeight]
+			)
 	else {
 		throw HEICResizeError.missingImageDimensions
 	}
+
+	let originalDimensions = PixelDimensions(
+		width: width,
+		height: height
+	)
 
 	let maximumPixelSize = max(
 		1,
@@ -93,17 +105,26 @@ func resizeHEIC(
 
 	let thumbnailOptions: [CFString: Any] = [
 		kCGImageSourceCreateThumbnailFromImageAlways: true,
-		kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
-		kCGImageSourceCreateThumbnailWithTransform: true
+		kCGImageSourceThumbnailMaxPixelSize:
+			maximumPixelSize,
+		kCGImageSourceCreateThumbnailWithTransform:
+			true
 	]
 
-	guard let resizedImage = CGImageSourceCreateThumbnailAtIndex(
-		source,
-		imageIndex,
-		thumbnailOptions as CFDictionary
-	) else {
+	guard let resizedImage =
+		CGImageSourceCreateThumbnailAtIndex(
+			source,
+			imageIndex,
+			thumbnailOptions as CFDictionary
+		)
+	else {
 		throw HEICResizeError.couldNotCreateThumbnail
 	}
+
+	let outputDimensions = PixelDimensions(
+		width: resizedImage.width,
+		height: resizedImage.height
+	)
 
 	var outputProperties = properties
 
@@ -135,18 +156,29 @@ func resizeHEIC(
 		outputProperties as CFDictionary
 	)
 
+	var auxiliaryResults:
+		[AuxiliaryMapKind: AuxiliaryMapResult] = [:]
+
 	for option in auxiliaryOptions {
-		try processAuxiliaryImage(
-			option,
-			from: source,
-			imageIndex: imageIndex,
-			to: destination
-		)
+		auxiliaryResults[option.kind] =
+			try processAuxiliaryImage(
+				option,
+				from: source,
+				imageIndex: imageIndex,
+				to: destination
+			)
 	}
 
 	guard CGImageDestinationFinalize(destination) else {
 		throw HEICResizeError.couldNotFinalizeDestination
 	}
+
+	return HEICResizeResult(
+		fileName: inputURL.lastPathComponent,
+		mainImageOriginal: originalDimensions,
+		mainImageOutput: outputDimensions,
+		auxiliaryResults: auxiliaryResults
+	)
 }
 
 
@@ -157,7 +189,7 @@ private func processAuxiliaryImage(
 	from source: CGImageSource,
 	imageIndex: Int,
 	to destination: CGImageDestination
-) throws {
+) throws -> AuxiliaryMapResult {
 
 	let type = option.kind.imageIOType
 
@@ -168,37 +200,48 @@ private func processAuxiliaryImage(
 			type
 		)
 	else {
-		// The source simply does not contain this map type.
-		return
+		return .absent
 	}
+
+	let originalDimensions =
+		auxiliaryDimensions(from: auxiliaryInfo)
+		?? PixelDimensions(width: 0, height: 0)
 
 	guard option.isEnabled else {
 		print("Discarded \(option.kind.displayName)")
-		return
+
+		return .discarded(
+			original: originalDimensions
+		)
 	}
 
 	do {
-		let resizedAuxiliaryInfo =
-			try resizeAuxiliaryData(
-				auxiliaryInfo,
-				scale: option.scale
-			)
+		let resized = try resizeAuxiliaryData(
+			auxiliaryInfo,
+			scale: option.scale
+		)
 
 		CGImageDestinationAddAuxiliaryDataInfo(
 			destination,
 			type,
-			resizedAuxiliaryInfo
+			resized.auxiliaryInfo
 		)
 
 		print(
-			"Resized \(option.kind.displayName) to "
-			+ "\(Int(option.scale * 100))%"
+			"""
+			Resized \(option.kind.displayName): \
+			\(resized.originalDimensions.description) → \
+			\(resized.outputDimensions.description)
+			"""
 		)
 
-	} catch AuxiliaryResizeError.unsupportedPixelFormat(
-		let pixelFormat
-	) {
-		//Preserve unknown formats unchanged over dropping the auxiliary image and potentially destroying HDR or other data.
+		return .resized(
+			original: resized.originalDimensions,
+			output: resized.outputDimensions
+		)
+
+	} catch AuxiliaryResizeError
+		.unsupportedPixelFormat(let pixelFormat) {
 
 		CGImageDestinationAddAuxiliaryDataInfo(
 			destination,
@@ -206,14 +249,40 @@ private func processAuxiliaryImage(
 			auxiliaryInfo
 		)
 
+		let reason =
+			"Unsupported pixel format \(pixelFormat)"
+
 		print(
 			"""
-			Warning: \(option.kind.displayName) uses unsupported pixel \
-			format \(pixelFormat). It was retained at its original size.
+			Warning: \(option.kind.displayName) was retained \
+			unchanged. \(reason).
 			"""
+		)
+
+		return .retainedUnchanged(
+			original: originalDimensions,
+			reason: reason
 		)
 
 	} catch {
 		throw error
 	}
+}
+
+
+// MARK: - Helpers
+
+private func numberAsInt(
+	_ value: Any?
+) -> Int? {
+
+	if let value = value as? Int {
+		return value
+	}
+
+	if let value = value as? NSNumber {
+		return value.intValue
+	}
+
+	return nil
 }

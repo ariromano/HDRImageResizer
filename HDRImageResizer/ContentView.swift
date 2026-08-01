@@ -11,11 +11,17 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
 
-	@State private var message = "Drop HEIC files here"
+	@State private var message =
+		"Drop HEIC files here"
+
 	@State private var overwrite = false
 	@State private var imageScaleIndex = 1
+
 	@State private var auxiliaryMaps =
 		AuxiliaryMapOption.defaults
+
+	@State private var lastResult:
+		HEICResizeResult?
 
 	private let imageScales: [CGFloat] = [
 		0.25,
@@ -39,14 +45,27 @@ struct ContentView: View {
 
 			scaleControl(
 				title: "Main image",
+				status: lastResult?
+					.mainImageSummary,
 				index: $imageScaleIndex,
 				scales: imageScales
 			)
 
 			Divider()
 
-			Text("Auxiliary maps")
-				.font(.headline)
+			HStack {
+				Text("Auxiliary maps")
+					.font(.headline)
+
+				Spacer()
+
+				if let lastResult {
+					Text(lastResult.fileName)
+						.font(.caption)
+						.foregroundStyle(.secondary)
+						.lineLimit(1)
+				}
+			}
 
 			VStack(spacing: 14) {
 				ForEach($auxiliaryMaps) { $option in
@@ -64,7 +83,7 @@ struct ContentView: View {
 				.foregroundStyle(.secondary)
 		}
 		.padding(20)
-		.frame(width: 520)
+		.frame(width: 650)
 		.onDrop(
 			of: [.fileURL],
 			isTargeted: nil,
@@ -73,21 +92,30 @@ struct ContentView: View {
 	}
 
 
-	// MARK: - UI
+	// MARK: - Main image control
 
 	@ViewBuilder
 	private func scaleControl(
 		title: String,
+		status: String?,
 		index: Binding<Int>,
 		scales: [CGFloat]
 	) -> some View {
 
-		let selectedScale = scales[index.wrappedValue]
+		let selectedScale =
+			scales[index.wrappedValue]
 
 		VStack(alignment: .leading, spacing: 6) {
-			Text(
-				"\(title): \(Int(selectedScale * 100))%"
-			)
+			HStack {
+				Text(
+					"\(title): "
+					+ "\(Int(selectedScale * 100))%"
+				)
+
+				Spacer()
+
+				resultText(status)
+			}
 
 			Slider(
 				value: Binding(
@@ -108,10 +136,15 @@ struct ContentView: View {
 	}
 
 
+	// MARK: - Auxiliary controls
+
 	@ViewBuilder
 	private func auxiliaryMapControl(
 		option: Binding<AuxiliaryMapOption>
 	) -> some View {
+
+		let result = lastResult?
+			.result(for: option.wrappedValue.kind)
 
 		VStack(alignment: .leading, spacing: 6) {
 			HStack {
@@ -122,12 +155,19 @@ struct ContentView: View {
 
 				Spacer()
 
+				resultText(result?.summary)
+
 				if option.wrappedValue.isEnabled {
 					Text(
-						"\(Int(option.wrappedValue.scale * 100))%"
+						"""
+						\(Int(
+							option.wrappedValue.scale * 100
+						))%
+						"""
 					)
 					.monospacedDigit()
 					.foregroundStyle(.secondary)
+					.frame(width: 42, alignment: .trailing)
 				}
 			}
 
@@ -136,11 +176,13 @@ struct ContentView: View {
 					value: Binding(
 						get: {
 							Double(
-								option.wrappedValue.scaleIndex
+								option.wrappedValue
+									.scaleIndex
 							)
 						},
 						set: {
-							option.wrappedValue.scaleIndex =
+							option.wrappedValue
+								.scaleIndex =
 								Int($0.rounded())
 						}
 					),
@@ -156,6 +198,21 @@ struct ContentView: View {
 					AuxiliaryMapOption.availableScales
 				)
 			}
+		}
+	}
+
+
+	@ViewBuilder
+	private func resultText(
+		_ text: String?
+	) -> some View {
+
+		if let text {
+			Text(text)
+				.font(.caption)
+				.monospacedDigit()
+				.foregroundStyle(.secondary)
+				.lineLimit(1)
 		}
 	}
 
@@ -188,13 +245,11 @@ struct ContentView: View {
 		_ providers: [NSItemProvider]
 	) -> Bool {
 
-		/*
-		 Capture the current UI settings before entering the asynchronous
-		 item-provider callbacks.
-		*/
 		let imageScale = selectedImageScale
 		let overwriteOriginals = overwrite
-		let capturedAuxiliaryOptions = auxiliaryMaps
+
+		let capturedAuxiliaryOptions =
+			auxiliaryMaps
 
 		for provider in providers {
 			provider.loadItem(
@@ -224,6 +279,7 @@ struct ContentView: View {
 
 				do {
 					let finalURL: URL
+					let result: HEICResizeResult
 
 					if overwriteOriginals {
 						let temporaryURL =
@@ -231,7 +287,7 @@ struct ContentView: View {
 								for: sourceURL
 							)
 
-						try resizeHEIC(
+						result = try resizeHEIC(
 							from: sourceURL,
 							to: temporaryURL,
 							scale: imageScale,
@@ -254,7 +310,7 @@ struct ContentView: View {
 							scale: imageScale
 						)
 
-						try resizeHEIC(
+						result = try resizeHEIC(
 							from: sourceURL,
 							to: finalURL,
 							scale: imageScale,
@@ -263,8 +319,9 @@ struct ContentView: View {
 						)
 					}
 
-					updateMessage(
-						"Done:\n\(finalURL.lastPathComponent)"
+					updateResult(
+						result,
+						outputURL: finalURL
 					)
 
 				} catch {
@@ -285,6 +342,7 @@ struct ContentView: View {
 	) -> URL {
 
 		let percentage = Int(scale * 100)
+
 		let baseName =
 			sourceURL.deletingPathExtension()
 				.lastPathComponent
@@ -306,6 +364,18 @@ struct ContentView: View {
 			.appendingPathComponent(
 				".\(UUID().uuidString).heic"
 			)
+	}
+
+
+	private func updateResult(
+		_ result: HEICResizeResult,
+		outputURL: URL
+	) {
+		DispatchQueue.main.async {
+			lastResult = result
+			message =
+				"Created \(outputURL.lastPathComponent)"
+		}
 	}
 
 
