@@ -45,7 +45,8 @@ enum HEICResizeError: LocalizedError {
 func resizeHEIC(
 	from inputURL: URL,
 	to outputURL: URL,
-	scale: CGFloat
+	scale: CGFloat,
+	auxiliaryOptions: [AuxiliaryMapOption]
 ) throws {
 
 	guard scale > 0, scale <= 1 else {
@@ -84,7 +85,10 @@ func resizeHEIC(
 
 	let maximumPixelSize = max(
 		1,
-		Int((CGFloat(max(width, height)) * scale).rounded())
+		Int(
+			(CGFloat(max(width, height)) * scale)
+				.rounded()
+		)
 	)
 
 	let thumbnailOptions: [CFString: Any] = [
@@ -102,16 +106,27 @@ func resizeHEIC(
 	}
 
 	var outputProperties = properties
-	outputProperties[kCGImagePropertyPixelWidth] = resizedImage.width
-	outputProperties[kCGImagePropertyPixelHeight] = resizedImage.height
-	outputProperties[kCGImagePropertyOrientation] = 1 	// Orentiation is "baked" because we're re-writing the image anyway
+
+	outputProperties[kCGImagePropertyPixelWidth] =
+		resizedImage.width
+
+	outputProperties[kCGImagePropertyPixelHeight] =
+		resizedImage.height
+
+	outputProperties[kCGImagePropertyOrientation] = 1
 
 	if var exif = outputProperties[
 		kCGImagePropertyExifDictionary
 	] as? [CFString: Any] {
-		exif[kCGImagePropertyExifPixelXDimension] = resizedImage.width
-		exif[kCGImagePropertyExifPixelYDimension] = resizedImage.height
-		outputProperties[kCGImagePropertyExifDictionary] = exif
+
+		exif[kCGImagePropertyExifPixelXDimension] =
+			resizedImage.width
+
+		exif[kCGImagePropertyExifPixelYDimension] =
+			resizedImage.height
+
+		outputProperties[kCGImagePropertyExifDictionary] =
+			exif
 	}
 
 	CGImageDestinationAddImage(
@@ -120,13 +135,14 @@ func resizeHEIC(
 		outputProperties as CFDictionary
 	)
 
-	try addResizedAuxiliaryImage(
-		ofType: kCGImageAuxiliaryDataTypeHDRGainMap,
-		from: source,
-		imageIndex: imageIndex,
-		to: destination,
-		scale: scale
-	)
+	for option in auxiliaryOptions {
+		try processAuxiliaryImage(
+			option,
+			from: source,
+			imageIndex: imageIndex,
+			to: destination
+		)
+	}
 
 	guard CGImageDestinationFinalize(destination) else {
 		throw HEICResizeError.couldNotFinalizeDestination
@@ -136,13 +152,14 @@ func resizeHEIC(
 
 // MARK: - Auxiliary images
 
-private func addResizedAuxiliaryImage(
-	ofType type: CFString,
+private func processAuxiliaryImage(
+	_ option: AuxiliaryMapOption,
 	from source: CGImageSource,
 	imageIndex: Int,
-	to destination: CGImageDestination,
-	scale: CGFloat
+	to destination: CGImageDestination
 ) throws {
+
+	let type = option.kind.imageIOType
 
 	guard let auxiliaryInfo =
 		CGImageSourceCopyAuxiliaryDataInfoAtIndex(
@@ -151,14 +168,21 @@ private func addResizedAuxiliaryImage(
 			type
 		)
 	else {
+		// The source simply does not contain this map type.
+		return
+	}
+
+	guard option.isEnabled else {
+		print("Discarded \(option.kind.displayName)")
 		return
 	}
 
 	do {
-		let resizedAuxiliaryInfo = try resizeAuxiliaryData(
-			auxiliaryInfo,
-			scale: scale
-		)
+		let resizedAuxiliaryInfo =
+			try resizeAuxiliaryData(
+				auxiliaryInfo,
+				scale: option.scale
+			)
 
 		CGImageDestinationAddAuxiliaryDataInfo(
 			destination,
@@ -167,14 +191,14 @@ private func addResizedAuxiliaryImage(
 		)
 
 		print(
-			"Resized auxiliary image:",
-			type
+			"Resized \(option.kind.displayName) to "
+			+ "\(Int(option.scale * 100))%"
 		)
 
-	} catch AuxiliaryResizeError.unsupportedPixelFormat(let pixelFormat) {
-
-		
-		 //Preserve unknown formats unchanged over dropping the auxiliary image and potentially destroying HDR or other data.
+	} catch AuxiliaryResizeError.unsupportedPixelFormat(
+		let pixelFormat
+	) {
+		//Preserve unknown formats unchanged over dropping the auxiliary image and potentially destroying HDR or other data.
 
 		CGImageDestinationAddAuxiliaryDataInfo(
 			destination,
@@ -184,13 +208,12 @@ private func addResizedAuxiliaryImage(
 
 		print(
 			"""
-			Warning: copied auxiliary image without resizing it because \
-			pixel format \(pixelFormat) is unsupported.
+			Warning: \(option.kind.displayName) uses unsupported pixel \
+			format \(pixelFormat). It was retained at its original size.
 			"""
 		)
 
 	} catch {
-
 		throw error
 	}
 }
