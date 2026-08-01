@@ -25,9 +25,11 @@ struct ContentView: View {
 		HEICResizeResult?
 
 	private let imageScales: [CGFloat] = [
+		0.10,
 		0.25,
 		0.50,
-		0.75
+		0.75,
+		1.0
 	]
 
 	private var selectedImageScale: CGFloat {
@@ -64,7 +66,7 @@ struct ContentView: View {
 				}
 			}
 
-			VStack(spacing: 14) {
+			VStack(spacing: 16) {
 				ForEach($auxiliaryMaps) {
 					$option in
 
@@ -82,7 +84,7 @@ struct ContentView: View {
 				.foregroundStyle(.secondary)
 		}
 		.padding(20)
-		.frame(width: 680)
+		.frame(width: 720)
 		.onDrop(
 			of: [.fileURL],
 			isTargeted: nil,
@@ -94,42 +96,46 @@ struct ContentView: View {
 	// MARK: - Main image
 
 	private var mainImageControl: some View {
-		VStack(alignment: .leading, spacing: 6) {
+		HStack(alignment: .center, spacing: 14) {
 
-			HStack {
-				Text(
-					"Main image: "
-					+ "\(Int(selectedImageScale * 100))%"
-				)
-
-				Spacer()
-
-				previewButton(
-					lastResult?.mainImagePreview
-				)
-
-				resultText(
-					lastResult?.mainImageSummary
-				)
-			}
-
-			Slider(
-				value: Binding(
-					get: {
-						Double(imageScaleIndex)
-					},
-					set: {
-						imageScaleIndex =
-							Int($0.rounded())
-					}
-				),
-				in: 0...Double(
-					imageScales.count - 1
-				),
-				step: 1
+			previewThumbnail(
+				lastResult?.mainImagePreview,
+				placeholderSystemImage: "photo"
 			)
 
-			scaleLabels(imageScales)
+			VStack(alignment: .leading, spacing: 6) {
+
+				HStack {
+					Text(
+						"Main image: "
+						+ "\(Int(selectedImageScale * 100))%"
+					)
+
+					Spacer()
+
+					resultText(
+						lastResult?.mainImageSummary
+					)
+				}
+
+				Slider(
+					value: Binding(
+						get: {
+							Double(imageScaleIndex)
+						},
+						set: {
+							imageScaleIndex =
+								Int($0.rounded())
+						}
+					),
+					in: 0...Double(
+						imageScales.count - 1
+					),
+					step: 1
+				)
+
+				scaleLabels(imageScales)
+			}
 		}
 	}
 
@@ -147,91 +153,153 @@ struct ContentView: View {
 		let result =
 			lastResult?.result(for: kind)
 
-		VStack(alignment: .leading, spacing: 6) {
+		HStack(alignment: .center, spacing: 14) {
 
-			HStack {
-				Toggle(
-					kind.displayName,
-					isOn: option.isEnabled
-				)
+			previewThumbnail(
+				result?.preview,
+				placeholderSystemImage:
+					"photo.on.rectangle.angled"
+			)
 
-				Spacer()
+			VStack(alignment: .leading, spacing: 6) {
 
-				previewButton(
-					result?.preview
-				)
+				HStack {
+					Toggle(
+						kind.displayName,
+						isOn: option.isEnabled
+					)
 
-				resultText(
-					result?.summary
-				)
+					Spacer()
+
+					resultText(
+						result?.summary
+					)
+
+					if option.wrappedValue.isEnabled {
+						Text(
+							"""
+							\(Int(
+								option.wrappedValue
+									.scale * 100
+							))%
+							"""
+						)
+						.monospacedDigit()
+						.foregroundStyle(.secondary)
+						.frame(
+							width: 42,
+							alignment: .trailing
+						)
+					}
+				}
 
 				if option.wrappedValue.isEnabled {
-					Text(
-						"""
-						\(Int(
-							option.wrappedValue
-								.scale * 100
-						))%
-						"""
-					)
-					.monospacedDigit()
-					.foregroundStyle(.secondary)
-					.frame(
-						width: 42,
-						alignment: .trailing
-					)
-				}
-			}
-
-			if option.wrappedValue.isEnabled {
-				Slider(
-					value: Binding(
-						get: {
-							Double(
+					Slider(
+						value: Binding(
+							get: {
+								Double(
+									option.wrappedValue
+										.scaleIndex
+								)
+							},
+							set: {
 								option.wrappedValue
-									.scaleIndex
-							)
-						},
-						set: {
-							option.wrappedValue
-								.scaleIndex =
-								Int($0.rounded())
-						}
-					),
-					in: 0...Double(
+									.scaleIndex =
+									Int($0.rounded())
+							}
+						),
+						in: 0...Double(
+							AuxiliaryMapOption
+								.availableScales
+								.count - 1
+						),
+						step: 1
+					)
+
+					scaleLabels(
 						AuxiliaryMapOption
 							.availableScales
-							.count - 1
-					),
-					step: 1
-				)
-
-				scaleLabels(
-					AuxiliaryMapOption
-						.availableScales
-				)
+					)
+				}
 			}
 		}
 	}
 
 
-	// MARK: - Preview buttons
+	// MARK: - Thumbnail previews
 
 	@ViewBuilder
-	private func previewButton(
-		_ preview: ImagePreview?
+	private func previewThumbnail(
+		_ preview: ImagePreview?,
+		placeholderSystemImage: String
 	) -> some View {
 
-		if let url = preview?.url {
+		if
+			let url = preview?.url,
+			let image = NSImage(contentsOf: url)
+		{
 			Button {
 				NSWorkspace.shared.open(url)
 			} label: {
-				Image(systemName: "photo")
+				Image(nsImage: image)
+					.resizable()
+					.aspectRatio(contentMode: .fill)
+					.frame(
+						width: 72,
+						height: 72
+					)
+					.clipped()
+					.background(
+						Color.secondary.opacity(0.08)
+					)
+					.clipShape(
+						RoundedRectangle(
+							cornerRadius: 7
+						)
+					)
+					.overlay {
+						RoundedRectangle(
+							cornerRadius: 7
+						)
+						.stroke(
+							Color.secondary.opacity(0.25),
+							lineWidth: 1
+						)
+					}
 			}
-			.buttonStyle(.borderless)
+			.buttonStyle(.plain)
 			.help(
 				"Open \(url.lastPathComponent)"
 			)
+
+		} else {
+			ZStack {
+				RoundedRectangle(
+					cornerRadius: 7
+				)
+				.fill(
+					Color.secondary.opacity(0.08)
+				)
+
+				Image(
+					systemName: placeholderSystemImage
+				)
+				.font(.title2)
+				.foregroundStyle(.tertiary)
+			}
+			.frame(
+				width: 72,
+				height: 72
+			)
+			.overlay {
+				RoundedRectangle(
+					cornerRadius: 7
+				)
+				.stroke(
+					Color.secondary.opacity(0.18),
+					lineWidth: 1
+				)
+			}
 		}
 	}
 

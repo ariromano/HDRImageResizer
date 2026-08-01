@@ -68,9 +68,11 @@ struct AuxiliaryMapOption: Identifiable {
 	}
 
 	static let availableScales: [CGFloat] = [
+		0.10,
 		0.25,
 		0.50,
-		0.75
+		0.75,
+		1.0
 	]
 
 	static let defaults: [AuxiliaryMapOption] = [
