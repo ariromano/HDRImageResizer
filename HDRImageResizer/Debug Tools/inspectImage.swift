@@ -1,5 +1,3 @@
-// dumpGainMap.swift
-
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
