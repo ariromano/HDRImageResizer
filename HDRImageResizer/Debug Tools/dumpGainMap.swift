@@ -62,14 +62,18 @@ for imageIndex in 0..<imageCount {
 		print("""
 		
 		Decoded CGImage:
-		  width: \(image.width)
-		  height: \(image.height)
-		  bits/component: \(image.bitsPerComponent)
-		  bits/pixel: \(image.bitsPerPixel)
-		  bitmapInfo: \(image.bitmapInfo)
-		  alphaInfo: \(image.alphaInfo)
+		\twidth: \(image.width)
+		\theight: \(image.height)
+		\tbits/component: \(image.bitsPerComponent)
+		\tbits/pixel: \(image.bitsPerPixel)
+		\tbitmapInfo: \(image.bitmapInfo)
+		\talphaInfo: \(image.alphaInfo)
 		""")
+		if let colorSpace = image.colorSpace {
+			print("\tColor space:", colorSpace)
+		}
 	}
+	
 
 	if let gainMap =
 		CGImageSourceCopyAuxiliaryDataInfoAtIndex(
