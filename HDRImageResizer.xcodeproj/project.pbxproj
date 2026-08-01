@@ -14,7 +14,7 @@
 		FD919382301D35C4009E661C /* Exceptions for "HDRImageResizer" folder in "HDRImageResizer" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				"Debug Tools/dumpGainMap.swift",
+				"Debug Tools/inspectImage.swift",
 			);
 			target = FD919366301CF9DB009E661C /* HDRImageResizer */;
 		};
