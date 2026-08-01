@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 
 enum HEICResizeError: LocalizedError {
 	case invalidScale(CGFloat)
+	case invalidCompressionQuality(Double)
 	case couldNotOpenSource
 	case couldNotCreateDestination
 	case missingImageDimensions
@@ -22,6 +23,9 @@ enum HEICResizeError: LocalizedError {
 		switch self {
 		case .invalidScale(let scale):
 			return "Invalid image scale: \(scale)."
+
+		case .invalidCompressionQuality(let quality):
+			return "Invalid compression quality: \(quality)."
 
 		case .couldNotOpenSource:
 			return "Could not open the source HEIC image."
@@ -46,12 +50,19 @@ func resizeHEIC(
 	from inputURL: URL,
 	to outputURL: URL,
 	scale: CGFloat,
+	compressionQuality: Double,
 	auxiliaryOptions: [AuxiliaryMapOption],
 	previewDirectory: URL
 ) throws -> HEICResizeResult {
 
 	guard scale > 0, scale <= 1 else {
 		throw HEICResizeError.invalidScale(scale)
+	}
+
+	guard (0...1).contains(compressionQuality) else {
+		throw HEICResizeError.invalidCompressionQuality(
+			compressionQuality
+		)
 	}
 
 	try FileManager.default.createDirectory(
@@ -142,6 +153,10 @@ func resizeHEIC(
 	 orientation to the pixels, so the output orientation is normal.
 	 */
 	outputProperties[kCGImagePropertyOrientation] = 1
+
+	outputProperties[
+		kCGImageDestinationLossyCompressionQuality
+	] = compressionQuality
 
 	updateExifDimensions(
 		in: &outputProperties,

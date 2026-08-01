@@ -17,6 +17,7 @@ struct ContentView: View {
 
 	@State private var overwrite = false
 	@State private var imageScaleIndex = 1
+	@State private var compressionQuality = 0.90
 
 	@State private var auxiliaryMaps =
 		AuxiliaryMapOption.defaults
@@ -48,6 +49,8 @@ struct ContentView: View {
 			Divider()
 
 			mainImageControl
+
+			compressionQualityControl
 
 			Divider()
 
@@ -136,6 +139,37 @@ struct ContentView: View {
 
 				scaleLabels(imageScales)
 			}
+		}
+	}
+
+
+	// MARK: - Compression quality
+
+	private var compressionQualityControl: some View {
+		VStack(alignment: .leading, spacing: 6) {
+			HStack {
+				Text("Compression quality")
+
+				Spacer()
+
+				Text("\(Int(compressionQuality * 100))%")
+					.monospacedDigit()
+					.foregroundStyle(.secondary)
+			}
+
+			Slider(
+				value: $compressionQuality,
+				in: 0.10...1.00,
+				step: 0.05
+			)
+
+			HStack {
+				Text("Smaller")
+				Spacer()
+				Text("Higher quality")
+			}
+			.font(.caption)
+			.foregroundStyle(.secondary)
 		}
 	}
 
@@ -366,6 +400,9 @@ struct ContentView: View {
 		let capturedAuxiliaryOptions =
 			auxiliaryMaps
 
+		let capturedCompressionQuality =
+			compressionQuality
+
 		for provider in providers {
 			provider.loadItem(
 				forTypeIdentifier:
@@ -413,6 +450,8 @@ struct ContentView: View {
 							from: sourceURL,
 							to: temporaryURL,
 							scale: imageScale,
+							compressionQuality:
+								capturedCompressionQuality,
 							auxiliaryOptions:
 								capturedAuxiliaryOptions,
 							previewDirectory:
@@ -438,6 +477,8 @@ struct ContentView: View {
 							from: sourceURL,
 							to: finalURL,
 							scale: imageScale,
+							compressionQuality:
+								capturedCompressionQuality,
 							auxiliaryOptions:
 								capturedAuxiliaryOptions,
 							previewDirectory:
