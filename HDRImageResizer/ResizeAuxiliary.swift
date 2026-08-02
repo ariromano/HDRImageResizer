@@ -5,13 +5,6 @@
 //  Created by Ari Romano McBride on 8/1/26.
 //
 
-//
-//  ResizeAuxiliary.swift
-//  HDRImageResizer
-//
-//  Created by Ari Romano McBride on 8/1/26.
-//
-
 import Foundation
 import Accelerate
 import ImageIO
