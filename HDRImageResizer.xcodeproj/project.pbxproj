@@ -15,6 +15,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				"Debug Tools/inspectImage.swift",
+				"Debug Tools/testCoreImageHDR.swift",
 			);
 			target = FD919366301CF9DB009E661C /* HDRImageResizer */;
 		};
