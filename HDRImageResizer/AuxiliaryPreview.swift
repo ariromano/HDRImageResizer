@@ -7,6 +7,7 @@
 
 import Foundation
 import CoreGraphics
+import CoreVideo
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -69,15 +70,6 @@ enum AuxiliaryPreviewError: LocalizedError {
 }
 
 
-/// Writes a visible grayscale PNG representation of an ImageIO auxiliary image.
-///
-/// Supported formats:
-/// - `L008`: 8-bit unsigned grayscale
-/// - `L016`: 16-bit unsigned grayscale
-/// - `Lf32`: 32-bit floating-point grayscale
-///
-/// `L016` and `Lf32` are normalized to the full 0–255 range for viewing.
-/// The preview does not alter the auxiliary data stored in the HEIC.
 func writeAuxiliaryPreviewPNG(
 	_ auxiliaryInfo: CFDictionary,
 	to outputURL: URL
@@ -86,6 +78,14 @@ func writeAuxiliaryPreviewPNG(
 	let image = try makeAuxiliaryPreviewImage(
 		from: auxiliaryInfo
 	)
+
+	if FileManager.default.fileExists(
+		atPath: outputURL.path
+	) {
+		try FileManager.default.removeItem(
+			at: outputURL
+		)
+	}
 
 	guard let destination =
 		CGImageDestinationCreateWithURL(
@@ -180,7 +180,13 @@ private func makeAuxiliaryPreviewImage(
 	let grayscaleData: Data
 
 	switch pixelFormat {
+
+	// 8-bit integer grayscale
 	case previewFourCharacterCode("L008"):
+		guard bytesPerRow >= width else {
+			throw AuxiliaryPreviewError.invalidBytesPerRow
+		}
+
 		grayscaleData = extractPlanar8(
 			data: data,
 			width: width,
@@ -188,8 +194,14 @@ private func makeAuxiliaryPreviewImage(
 			bytesPerRow: bytesPerRow
 		)
 
+	// 16-bit integer grayscale
 	case previewFourCharacterCode("L016"):
-		guard bytesPerRow.isMultiple(of: 2) else {
+		guard
+			bytesPerRow >= width * MemoryLayout<UInt16>.size,
+			bytesPerRow.isMultiple(
+				of: MemoryLayout<UInt16>.alignment
+			)
+		else {
 			throw AuxiliaryPreviewError.invalidBytesPerRow
 		}
 
@@ -200,12 +212,58 @@ private func makeAuxiliaryPreviewImage(
 			bytesPerRow: bytesPerRow
 		)
 
+	// Generic 32-bit floating-point grayscale
 	case previewFourCharacterCode("Lf32"):
-		guard bytesPerRow.isMultiple(of: 4) else {
+		guard
+			bytesPerRow >= width * MemoryLayout<Float>.size,
+			bytesPerRow.isMultiple(
+				of: MemoryLayout<Float>.alignment
+			)
+		else {
 			throw AuxiliaryPreviewError.invalidBytesPerRow
 		}
 
-		grayscaleData = normalizePlanarFloat(
+		grayscaleData = normalizePlanarFloat32(
+			data: data,
+			width: width,
+			height: height,
+			bytesPerRow: bytesPerRow
+		)
+
+	// Half-float depth or disparity
+	case kCVPixelFormatType_DepthFloat16,
+		 kCVPixelFormatType_DisparityFloat16:
+
+		guard
+			bytesPerRow >= width * MemoryLayout<Float16>.size,
+			bytesPerRow.isMultiple(
+				of: MemoryLayout<Float16>.alignment
+			)
+		else {
+			throw AuxiliaryPreviewError.invalidBytesPerRow
+		}
+
+		grayscaleData = normalizePlanarFloat16(
+			data: data,
+			width: width,
+			height: height,
+			bytesPerRow: bytesPerRow
+		)
+
+	// Full-float depth or disparity
+	case kCVPixelFormatType_DepthFloat32,
+		 kCVPixelFormatType_DisparityFloat32:
+
+		guard
+			bytesPerRow >= width * MemoryLayout<Float>.size,
+			bytesPerRow.isMultiple(
+				of: MemoryLayout<Float>.alignment
+			)
+		else {
+			throw AuxiliaryPreviewError.invalidBytesPerRow
+		}
+
+		grayscaleData = normalizePlanarFloat32(
 			data: data,
 			width: width,
 			height: height,
@@ -314,50 +372,76 @@ private func normalizePlanar16(
 				.assumingMemoryBound(to: UInt16.self)
 
 			for column in 0..<width {
-				values.append(rowPointer[column])
+				values.append(
+					rowPointer[column]
+				)
 			}
 		}
 	}
 
-	guard
-		values.count == pixelCount,
-		let minimum = values.min(),
-		let maximum = values.max()
-	else {
+	guard values.count == pixelCount else {
 		return Data(
 			repeating: 0,
 			count: pixelCount
 		)
 	}
 
-	guard maximum > minimum else {
-		return Data(
-			repeating: 0,
-			count: pixelCount
-		)
-	}
-
-	let range =
-		Double(maximum) - Double(minimum)
-
-	let output = values.map { value -> UInt8 in
-		let normalized =
-			(Double(value) - Double(minimum))
-			/ range
-
-		return UInt8(
-			clamping:
-				Int((normalized * 255).rounded())
-		)
-	}
-
-	return Data(output)
+	return normalizeIntegerValues(values)
 }
 
 
-// MARK: - Lf32
+// MARK: - Float16 depth and disparity
 
-private func normalizePlanarFloat(
+private func normalizePlanarFloat16(
+	data: Data,
+	width: Int,
+	height: Int,
+	bytesPerRow: Int
+) -> Data {
+
+	let pixelCount = width * height
+
+	var values = [Float]()
+	values.reserveCapacity(pixelCount)
+
+	data.withUnsafeBytes { bytes in
+		guard let baseAddress = bytes.baseAddress else {
+			return
+		}
+
+		for row in 0..<height {
+			let rowPointer = baseAddress
+				.advanced(by: row * bytesPerRow)
+				.assumingMemoryBound(to: Float16.self)
+
+			for column in 0..<width {
+				let value = Float(
+					rowPointer[column]
+				)
+
+				values.append(
+					value.isFinite
+						? value
+						: .nan
+				)
+			}
+		}
+	}
+
+	guard values.count == pixelCount else {
+		return Data(
+			repeating: 0,
+			count: pixelCount
+		)
+	}
+
+	return normalizeFloatingPointValues(values)
+}
+
+
+// MARK: - Float32 grayscale, depth, and disparity
+
+private func normalizePlanarFloat32(
 	data: Data,
 	width: Int,
 	height: Int,
@@ -383,39 +467,104 @@ private func normalizePlanarFloat(
 				let value = rowPointer[column]
 
 				values.append(
-					value.isFinite ? value : 0
+					value.isFinite
+						? value
+						: .nan
 				)
 			}
 		}
 	}
 
-	guard
-		values.count == pixelCount,
-		let minimum = values.min(),
-		let maximum = values.max()
-	else {
+	guard values.count == pixelCount else {
 		return Data(
 			repeating: 0,
 			count: pixelCount
 		)
 	}
 
-	guard maximum > minimum else {
+	return normalizeFloatingPointValues(values)
+}
+
+
+// MARK: - Normalization
+
+private func normalizeIntegerValues(
+	_ values: [UInt16]
+) -> Data {
+
+	guard
+		let minimum = values.min(),
+		let maximum = values.max(),
+		maximum > minimum
+	else {
 		return Data(
 			repeating: 0,
-			count: pixelCount
+			count: values.count
+		)
+	}
+
+	let minimumDouble = Double(minimum)
+	let range =
+		Double(maximum) - minimumDouble
+
+	let output = values.map { value -> UInt8 in
+		let normalized =
+			(Double(value) - minimumDouble)
+			/ range
+
+		return UInt8(
+			clamping:
+				Int(
+					(normalized * 255)
+						.rounded()
+				)
+		)
+	}
+
+	return Data(output)
+}
+
+
+private func normalizeFloatingPointValues(
+	_ values: [Float]
+) -> Data {
+
+	let finiteValues = values.filter {
+		$0.isFinite
+	}
+
+	guard
+		let minimum = finiteValues.min(),
+		let maximum = finiteValues.max(),
+		maximum > minimum
+	else {
+		return Data(
+			repeating: 0,
+			count: values.count
 		)
 	}
 
 	let range = maximum - minimum
 
 	let output = values.map { value -> UInt8 in
-		let normalized =
-			(value - minimum) / range
+		guard value.isFinite else {
+			return 0
+		}
+
+		let normalized = min(
+			1,
+			max(
+				0,
+				(value - minimum) / range
+			)
+		)
 
 		return UInt8(
 			clamping:
-				Int((normalized * 255).rounded())
+				Int(
+					(normalized * 255)
+						.rounded()
+				)
 		)
 	}
 
@@ -451,7 +600,9 @@ private func previewInteger(
 		return value.intValue
 	}
 
-	throw AuxiliaryPreviewError.missingValue(key)
+	throw AuxiliaryPreviewError.missingValue(
+		key
+	)
 }
 
 
@@ -474,7 +625,9 @@ private func previewUInt32(
 		return value.uint32Value
 	}
 
-	throw AuxiliaryPreviewError.missingValue(key)
+	throw AuxiliaryPreviewError.missingValue(
+		key
+	)
 }
 
 

@@ -200,7 +200,7 @@ struct ContentView: View {
 				HStack {
 					Toggle(
 						kind.displayName,
-						isOn: option.isEnabled
+						isOn: option.enabled
 					)
 
 					Spacer()
@@ -209,14 +209,9 @@ struct ContentView: View {
 						result?.summary
 					)
 
-					if option.wrappedValue.isEnabled {
+					if option.wrappedValue.enabled {
 						Text(
-							"""
-							\(Int(
-								option.wrappedValue
-									.scale * 100
-							))%
-							"""
+							"\(Int(option.wrappedValue.scale * 100))%"
 						)
 						.monospacedDigit()
 						.foregroundStyle(.secondary)
@@ -227,33 +222,36 @@ struct ContentView: View {
 					}
 				}
 
-				if option.wrappedValue.isEnabled {
+				if option.wrappedValue.enabled {
 					Slider(
 						value: Binding(
 							get: {
 								Double(
-									option.wrappedValue
-										.scaleIndex
+									option.wrappedValue.scale
 								)
 							},
 							set: {
-								option.wrappedValue
-									.scaleIndex =
-									Int($0.rounded())
+								option.wrappedValue.scale =
+									CGFloat($0)
 							}
 						),
-						in: 0...Double(
-							AuxiliaryMapOption
-								.availableScales
-								.count - 1
-						),
-						step: 1
+						in: 0.10...1.00,
+						step: 0.05
 					)
 
-					scaleLabels(
-						AuxiliaryMapOption
-							.availableScales
-					)
+					HStack {
+						Text("10%")
+						Spacer()
+						Text("25%")
+						Spacer()
+						Text("50%")
+						Spacer()
+						Text("75%")
+						Spacer()
+						Text("100%")
+					}
+					.font(.caption)
+					.foregroundStyle(.secondary)
 				}
 			}
 		}

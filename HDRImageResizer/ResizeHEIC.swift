@@ -6,8 +6,6 @@
 //
 
 import Foundation
-import CoreImage
-import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -18,11 +16,8 @@ enum HEICResizeError: LocalizedError {
 	case couldNotOpenSource
 	case couldNotCreateDestination
 	case missingImageDimensions
-	case couldNotLoadMainImage
-	case couldNotCreatePQColorSpace
-	case couldNotCreateSDRColorSpace
-	case couldNotWriteImage
-	case couldNotLoadAuxiliaryImage(AuxiliaryMapKind)
+	case couldNotCreateThumbnail
+	case couldNotFinalizeDestination
 
 	var errorDescription: String? {
 		switch self {
@@ -41,20 +36,11 @@ enum HEICResizeError: LocalizedError {
 		case .missingImageDimensions:
 			return "Could not read the source image dimensions."
 
-		case .couldNotLoadMainImage:
-			return "Core Image could not load the main image."
+		case .couldNotCreateThumbnail:
+			return "Could not create the resized image."
 
-		case .couldNotCreatePQColorSpace:
-			return "Could not create the BT.2100 PQ color space."
-
-		case .couldNotCreateSDRColorSpace:
-			return "Could not create the Display P3 color space."
-
-		case .couldNotWriteImage:
-			return "Core Image could not write the output HEIC."
-
-		case .couldNotLoadAuxiliaryImage(let kind):
-			return "Core Image could not load the \(kind.displayName)."
+		case .couldNotFinalizeDestination:
+			return "Could not finish writing the resized HEIC image."
 		}
 	}
 }
@@ -84,31 +70,35 @@ func resizeHEIC(
 		withIntermediateDirectories: true
 	)
 
-	guard let imageSource = CGImageSourceCreateWithURL(
+	guard let source = CGImageSourceCreateWithURL(
 		inputURL as CFURL,
 		nil
 	) else {
 		throw HEICResizeError.couldNotOpenSource
 	}
 
+	guard let destination = CGImageDestinationCreateWithURL(
+		outputURL as CFURL,
+		UTType.heic.identifier as CFString,
+		1,
+		nil
+	) else {
+		throw HEICResizeError.couldNotCreateDestination
+	}
+
 	let imageIndex = 0
 
 	guard
-		let imageProperties =
-			CGImageSourceCopyPropertiesAtIndex(
-				imageSource,
-				imageIndex,
-				nil
-			) as? [CFString: Any],
+		let properties = CGImageSourceCopyPropertiesAtIndex(
+			source,
+			imageIndex,
+			nil
+		) as? [CFString: Any],
 		let width = integerValue(
-			imageProperties[
-				kCGImagePropertyPixelWidth
-			]
+			properties[kCGImagePropertyPixelWidth]
 		),
 		let height = integerValue(
-			imageProperties[
-				kCGImagePropertyPixelHeight
-			]
+			properties[kCGImagePropertyPixelHeight]
 		)
 	else {
 		throw HEICResizeError.missingImageDimensions
@@ -119,129 +109,80 @@ func resizeHEIC(
 		height: height
 	)
 
-	let sourceHasGainMap =
-		CGImageSourceCopyAuxiliaryDataInfoAtIndex(
-			imageSource,
-			imageIndex,
-			kCGImageAuxiliaryDataTypeHDRGainMap
-		) != nil
-
-	let context = CIContext()
-
-	/*
-	 Gain-map images must remain an SDR base plus a gain map.
-
-	 Native HDR images are loaded expanded into their HDR representation
-	 and written as 10-bit BT.2100 PQ.
-	 */
-	let mainLoadOptions: [CIImageOption: Any]
-
-	if sourceHasGainMap {
-		mainLoadOptions = [
-			.applyOrientationProperty: true
-		]
-	} else {
-		mainLoadOptions = [
-			.applyOrientationProperty: true,
-			.expandToHDR: true
-		]
-	}
-
-	guard var sourceImage = CIImage(
-		contentsOf: inputURL,
-		options: mainLoadOptions
-	) else {
-		throw HEICResizeError.couldNotLoadMainImage
-	}
-
-	sourceImage = normalizeOrigin(sourceImage)
-
-	let resizedMainImage = resizeCIImage(
-		sourceImage,
-		scale: scale
+	let maximumPixelSize = max(
+		1,
+		Int(
+			(CGFloat(max(width, height)) * scale)
+				.rounded()
+		)
 	)
+
+	let thumbnailOptions: [CFString: Any] = [
+		kCGImageSourceCreateThumbnailFromImageAlways: true,
+		kCGImageSourceThumbnailMaxPixelSize:
+			maximumPixelSize,
+		kCGImageSourceCreateThumbnailWithTransform:
+			true
+	]
+
+	guard let resizedImage =
+		CGImageSourceCreateThumbnailAtIndex(
+			source,
+			imageIndex,
+			thumbnailOptions as CFDictionary
+		)
+	else {
+		throw HEICResizeError.couldNotCreateThumbnail
+	}
 
 	let outputDimensions = PixelDimensions(
-		width: Int(resizedMainImage.extent.width.rounded()),
-		height: Int(resizedMainImage.extent.height.rounded())
+		width: resizedImage.width,
+		height: resizedImage.height
 	)
 
-	var representationOptions:
-		[CIImageRepresentationOption: Any] = [:]
+	var outputProperties = properties
 
-	let qualityOption = CIImageRepresentationOption(
-		rawValue:
-			kCGImageDestinationLossyCompressionQuality
-				as String
+	outputProperties[kCGImagePropertyPixelWidth] =
+		resizedImage.width
+
+	outputProperties[kCGImagePropertyPixelHeight] =
+		resizedImage.height
+
+	//baking orientation
+	outputProperties[kCGImagePropertyOrientation] = 1
+
+	outputProperties[
+		kCGImageDestinationLossyCompressionQuality
+	] = compressionQuality
+
+	updateExifDimensions(
+		in: &outputProperties,
+		width: resizedImage.width,
+		height: resizedImage.height
 	)
 
-	representationOptions[qualityOption] =
-		compressionQuality
+	CGImageDestinationAddImage(
+		destination,
+		resizedImage,
+		outputProperties as CFDictionary
+	)
 
 	var auxiliaryResults:
 		[AuxiliaryMapKind: AuxiliaryMapResult] = [:]
 
 	for option in auxiliaryOptions {
-		let result = try processAuxiliaryImage(
-			option,
-			from: inputURL,
-			imageSource: imageSource,
-			imageIndex: imageIndex,
-			context: context,
-			previewDirectory: previewDirectory,
-			representationOptions:
-				&representationOptions
-		)
-
-		auxiliaryResults[option.kind] = result
+		auxiliaryResults[option.kind] =
+			try processAuxiliaryImage(
+				option,
+				from: source,
+				imageIndex: imageIndex,
+				to: destination,
+				previewDirectory: previewDirectory
+			)
 	}
 
-	if FileManager.default.fileExists(
-		atPath: outputURL.path
-	) {
-		try FileManager.default.removeItem(
-			at: outputURL
-		)
-	}
-
-	if sourceHasGainMap {
-		guard let displayP3 = CGColorSpace(
-			name: CGColorSpace.displayP3
-		) else {
-			throw HEICResizeError
-				.couldNotCreateSDRColorSpace
-		}
-
-		/*
-		 Keep the SDR base as an 8-bit Display P3 image. The separately
-		 attached gain map restores the HDR presentation.
-		 */
-		try context.writeHEIFRepresentation(
-			of: resizedMainImage,
-			to: outputURL,
-			format: .RGBA8,
-			colorSpace: displayP3,
-			options: representationOptions
-		)
-
-	} else {
-		guard let pqColorSpace = CGColorSpace(
-			name: CGColorSpace.itur_2100_PQ
-		) else {
-			throw HEICResizeError
-				.couldNotCreatePQColorSpace
-		}
-
-		/*
-		 Native HDR path. This is the path that preserved the highlight
-		 detail in the command-line experiment.
-		 */
-		try context.writeHEIF10Representation(
-			of: resizedMainImage,
-			to: outputURL,
-			colorSpace: pqColorSpace,
-			options: representationOptions
-		)
+	guard CGImageDestinationFinalize(destination) else {
+		throw HEICResizeError.couldNotFinalizeDestination
 	}
 
 	return HEICResizeResult(
@@ -256,30 +197,61 @@ func resizeHEIC(
 }
 
 
-// MARK: - Auxiliary processing
+// MARK: - Auxiliary images
+
+private struct ResolvedAuxiliaryImage {
+	let type: CFString
+
+	let info: CFDictionary
+}
+
+
+//combined depth/disparity
+private func resolveAuxiliaryImage(
+	for kind: AuxiliaryMapKind,
+	from source: CGImageSource,
+	imageIndex: Int
+) -> ResolvedAuxiliaryImage? {
+
+	for type in kind.possibleImageIOTypes {
+		if let info =
+			CGImageSourceCopyAuxiliaryDataInfoAtIndex(
+				source,
+				imageIndex,
+				type
+			) {
+
+			return ResolvedAuxiliaryImage(
+				type: type,
+				info: info
+			)
+		}
+	}
+
+	return nil
+}
+
 
 private func processAuxiliaryImage(
 	_ option: AuxiliaryMapOption,
-	from inputURL: URL,
-	imageSource: CGImageSource,
+	from source: CGImageSource,
 	imageIndex: Int,
-	context: CIContext,
-	previewDirectory: URL,
-	representationOptions:
-		inout [CIImageRepresentationOption: Any]
+	to destination: CGImageDestination,
+	previewDirectory: URL
 ) throws -> AuxiliaryMapResult {
 
-	let imageIOType = option.kind.imageIOType
-
-	guard let auxiliaryInfo =
-		CGImageSourceCopyAuxiliaryDataInfoAtIndex(
-			imageSource,
-			imageIndex,
-			imageIOType
+	guard let resolvedAuxiliary =
+		resolveAuxiliaryImage(
+			for: option.kind,
+			from: source,
+			imageIndex: imageIndex
 		)
 	else {
 		return .absent
 	}
+	//combined depth/disparity
+	let type = resolvedAuxiliary.type
+	let auxiliaryInfo = resolvedAuxiliary.info
 
 	let originalDimensions =
 		auxiliaryDimensions(from: auxiliaryInfo)
@@ -288,7 +260,7 @@ private func processAuxiliaryImage(
 			height: 0
 		)
 
-	guard option.isEnabled else {
+	guard option.enabled else {
 		print(
 			"Discarded \(option.kind.displayName)"
 		)
@@ -298,229 +270,106 @@ private func processAuxiliaryImage(
 		)
 	}
 
-	guard var auxiliaryImage = loadAuxiliaryCIImage(
-		option.kind,
-		from: inputURL
-	) else {
-		throw HEICResizeError
-			.couldNotLoadAuxiliaryImage(option.kind)
-	}
-
-	/*
-	 Preserve the auxiliary image's metadata. Gain-map metadata in
-	 particular describes how the map should be interpreted.
-	 */
-	let originalProperties =
-		auxiliaryImage.properties
-
-	auxiliaryImage =
-		normalizeOrigin(auxiliaryImage)
-
-	let resizedAuxiliaryImage = resizeCIImage(
-		auxiliaryImage,
-		scale: option.scale
-	)
-	.settingProperties(originalProperties)
-
-	let outputDimensions = PixelDimensions(
-		width: Int(
-			resizedAuxiliaryImage.extent.width.rounded()
-		),
-		height: Int(
-			resizedAuxiliaryImage.extent.height.rounded()
-		)
-	)
-
-	representationOptions[
-		option.kind.coreImageRepresentationOption
-	] = resizedAuxiliaryImage
-
-	let previewURL = previewDirectory
-		.appendingPathComponent(
-			"\(option.kind.rawValue).png"
+	do {
+		let resized = try resizeAuxiliaryData(
+			auxiliaryInfo,
+			scale: option.scale
 		)
 
-	let preview = createAuxiliaryPreview(
-		from: resizedAuxiliaryImage,
-		context: context,
-		at: previewURL
-	)
+		CGImageDestinationAddAuxiliaryDataInfo(
+			destination,
+			type,
+			resized.auxiliaryInfo
+		)
 
-	print(
-		"""
-		Resized \(option.kind.displayName): \
-		\(originalDimensions.description) → \
-		\(outputDimensions.description)
-		"""
-	)
+		let previewURL = makeAuxiliaryPreviewURL(
+			for: option.kind,
+			in: previewDirectory
+		)
 
-	return .resized(
-		original: originalDimensions,
-		output: outputDimensions,
-		preview: preview
-	)
-}
+		let preview = createAuxiliaryPreview(
+			from: resized.auxiliaryInfo,
+			at: previewURL
+		)
 
+		print(
+			"""
+			Resized \(option.kind.displayName): \
+			\(resized.originalDimensions.description) → \
+			\(resized.outputDimensions.description)
+			"""
+		)
 
-// MARK: - Core Image auxiliary loading
+		return .resized(
+			original: resized.originalDimensions,
+			output: resized.outputDimensions,
+			preview: preview
+		)
 
-private func loadAuxiliaryCIImage(
-	_ kind: AuxiliaryMapKind,
-	from inputURL: URL
-) -> CIImage? {
+	} catch AuxiliaryResizeError
+		.unsupportedPixelFormat(let pixelFormat) {
 
-	let options: [CIImageOption: Any] = [
-		kind.coreImageLoadOption: true,
-		.applyOrientationProperty: true
-	]
+		// Preserve an unknown maps
+		CGImageDestinationAddAuxiliaryDataInfo(
+			destination,
+			type,
+			auxiliaryInfo
+		)
 
-	return CIImage(
-		contentsOf: inputURL,
-		options: options
-	)
-}
+		let previewURL = makeAuxiliaryPreviewURL(
+			for: option.kind,
+			in: previewDirectory
+		)
 
+		let preview = createAuxiliaryPreview(
+			from: auxiliaryInfo,
+			at: previewURL
+		)
 
-private extension AuxiliaryMapKind {
+		let reason =
+			"Unsupported pixel format \(pixelFormat)"
 
-	var coreImageLoadOption: CIImageOption {
-		switch self {
-		case .hdrGainMap:
-			return .auxiliaryHDRGainMap
+		print(
+			"""
+			Warning: \(option.kind.displayName) was retained \
+			unchanged. \(reason).
+			"""
+		)
 
-		case .depth:
-			return .auxiliaryDepth
+		return .retainedUnchanged(
+			original: originalDimensions,
+			reason: reason,
+			preview: preview
+		)
 
-		case .disparity:
-			return .auxiliaryDisparity
-
-		case .portraitEffectsMatte:
-			return .auxiliaryPortraitEffectsMatte
-		}
-	}
-
-
-	var coreImageRepresentationOption:
-		CIImageRepresentationOption {
-
-		switch self {
-		case .hdrGainMap:
-			return .hdrGainMapImage
-
-		case .depth:
-			return .depthImage
-
-		case .disparity:
-			return .disparityImage
-
-		case .portraitEffectsMatte:
-			return .portraitEffectsMatteImage
-		}
+	} catch {
+		throw error
 	}
 }
 
 
-// MARK: - Core Image scaling
+// MARK: - Preview generation
 
-private func resizeCIImage(
-	_ image: CIImage,
-	scale: CGFloat
-) -> CIImage {
+private func makeAuxiliaryPreviewURL(
+	for kind: AuxiliaryMapKind,
+	in directory: URL
+) -> URL {
 
-	/*
-	 At 100%, leave the CIImage graph untouched. It will still be encoded
-	 again, but no resampling filter is applied.
-	 */
-	guard abs(scale - 1) > 0.000_001 else {
-		return image
-	}
-
-	let scaled = image.applyingFilter(
-		"CILanczosScaleTransform",
-		parameters: [
-			kCIInputScaleKey: scale,
-			kCIInputAspectRatioKey: 1.0
-		]
-	)
-
-	let normalized = normalizeOrigin(scaled)
-
-	let outputWidth = max(
-		1,
-		Int(
-			(image.extent.width * scale)
-				.rounded()
-		)
-	)
-
-	let outputHeight = max(
-		1,
-		Int(
-			(image.extent.height * scale)
-				.rounded()
-		)
-	)
-
-	return normalized.cropped(
-		to: CGRect(
-			x: 0,
-			y: 0,
-			width: outputWidth,
-			height: outputHeight
-		)
+	directory.appendingPathComponent(
+		"\(kind.rawValue).png"
 	)
 }
 
-
-private func normalizeOrigin(
-	_ image: CIImage
-) -> CIImage {
-
-	guard
-		image.extent.origin.x != 0
-		|| image.extent.origin.y != 0
-	else {
-		return image
-	}
-
-	return image.transformed(
-		by: CGAffineTransform(
-			translationX: -image.extent.origin.x,
-			y: -image.extent.origin.y
-		)
-	)
-}
-
-
-// MARK: - Auxiliary previews
 
 private func createAuxiliaryPreview(
-	from image: CIImage,
-	context: CIContext,
+	from auxiliaryInfo: CFDictionary,
 	at outputURL: URL
 ) -> ImagePreview {
 
 	do {
-		let previewImage = normalizePreviewImage(
-			image,
-			context: context
-		)
-
-		if FileManager.default.fileExists(
-			atPath: outputURL.path
-		) {
-			try FileManager.default.removeItem(
-				at: outputURL
-			)
-		}
-
-		try context.writePNGRepresentation(
-			of: previewImage,
-			to: outputURL,
-			format: .L8,
-			colorSpace:
-				CGColorSpaceCreateDeviceGray(),
-			options: [:]
+		try writeAuxiliaryPreviewPNG(
+			auxiliaryInfo,
+			to: outputURL
 		)
 
 		return ImagePreview(
@@ -528,6 +377,7 @@ private func createAuxiliaryPreview(
 		)
 
 	} catch {
+		// prevent failure due to preview generation issues
 		print(
 			"""
 			Warning: could not create auxiliary preview \
@@ -541,124 +391,30 @@ private func createAuxiliaryPreview(
 }
 
 
-/*
- CI auxiliary images can be integer, floating-point, or encoded using a
- specialized range. CIAreaMinMax finds their actual range, then CIColorMatrix
- maps that range to visible black-to-white for the PNG preview.
- */
-private func normalizePreviewImage(
-	_ image: CIImage,
-	context: CIContext
-) -> CIImage {
+// MARK: - Metadata
 
-	guard
-		let minimumAndMaximum =
-			previewMinimumAndMaximum(
-				of: image,
-				context: context
-			)
+private func updateExifDimensions(
+	in properties: inout [CFString: Any],
+	width: Int,
+	height: Int
+) {
+
+	guard var exif =
+		properties[
+			kCGImagePropertyExifDictionary
+		] as? [CFString: Any]
 	else {
-		return image
+		return
 	}
 
-	let minimum = minimumAndMaximum.minimum
-	let maximum = minimumAndMaximum.maximum
-	let range = maximum - minimum
+	exif[kCGImagePropertyExifPixelXDimension] =
+		width
 
-	guard
-		range.isFinite,
-		range > Float.ulpOfOne
-	else {
-		return image
-	}
+	exif[kCGImagePropertyExifPixelYDimension] =
+		height
 
-	let multiplier = CGFloat(1 / range)
-	let bias = CGFloat(-minimum / range)
-
-	return image.applyingFilter(
-		"CIColorMatrix",
-		parameters: [
-			"inputRVector":
-				CIVector(
-					x: multiplier,
-					y: 0,
-					z: 0,
-					w: 0
-				),
-			"inputGVector":
-				CIVector(
-					x: multiplier,
-					y: 0,
-					z: 0,
-					w: 0
-				),
-			"inputBVector":
-				CIVector(
-					x: multiplier,
-					y: 0,
-					z: 0,
-					w: 0
-				),
-			"inputBiasVector":
-				CIVector(
-					x: bias,
-					y: bias,
-					z: bias,
-					w: 0
-				)
-		]
-	)
-}
-
-
-private func previewMinimumAndMaximum(
-	of image: CIImage,
-	context: CIContext
-) -> (
-	minimum: Float,
-	maximum: Float
-)? {
-
-	let extent = image.extent.integral
-
-	guard !extent.isEmpty else {
-		return nil
-	}
-
-	let minMaxImage = image.applyingFilter(
-		"CIAreaMinMax",
-		parameters: [
-			kCIInputExtentKey:
-				CIVector(cgRect: extent)
-		]
-	)
-
-	var pixels = [
-		Float
-	](
-		repeating: 0,
-		count: 8
-	)
-
-	context.render(
-		minMaxImage,
-		toBitmap: &pixels,
-		rowBytes:
-			MemoryLayout<Float>.size * 8,
-		bounds: CGRect(
-			x: 0,
-			y: 0,
-			width: 2,
-			height: 1
-		),
-		format: .Rf,
-		colorSpace: nil
-	)
-
-	return (
-		minimum: pixels[0],
-		maximum: pixels[1]
-	)
+	properties[kCGImagePropertyExifDictionary] =
+		exif
 }
 
 

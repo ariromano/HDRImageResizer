@@ -7,17 +7,15 @@
 
 import Foundation
 import ImageIO
-import CoreGraphics
-
 
 enum AuxiliaryMapKind: String, CaseIterable, Identifiable {
+
 	case hdrGainMap
-	case depth
-	case disparity
+	case depthDisparity
 	case portraitEffectsMatte
 
-	var id: Self {
-		self
+	var id: String {
+		rawValue
 	}
 
 	var displayName: String {
@@ -25,76 +23,71 @@ enum AuxiliaryMapKind: String, CaseIterable, Identifiable {
 		case .hdrGainMap:
 			return "HDR gain map"
 
-		case .depth:
-			return "Depth map"
-
-		case .disparity:
-			return "Disparity map"
+		case .depthDisparity:
+			return "Depth / disparity map"
 
 		case .portraitEffectsMatte:
 			return "Portrait-effects matte"
 		}
 	}
 
-	var imageIOType: CFString {
+	// For depth we prefer a true depth map, but fall back to disparity if that's what the file contains
+	var possibleImageIOTypes: [CFString] {
 		switch self {
+
 		case .hdrGainMap:
-			return kCGImageAuxiliaryDataTypeHDRGainMap
+			return [
+				kCGImageAuxiliaryDataTypeHDRGainMap
+			]
 
-		case .depth:
-			return kCGImageAuxiliaryDataTypeDepth
-
-		case .disparity:
-			return kCGImageAuxiliaryDataTypeDisparity
+		case .depthDisparity:
+			return [
+				kCGImageAuxiliaryDataTypeDepth,
+				kCGImageAuxiliaryDataTypeDisparity
+			]
 
 		case .portraitEffectsMatte:
-			return kCGImageAuxiliaryDataTypePortraitEffectsMatte
+			return [
+				kCGImageAuxiliaryDataTypePortraitEffectsMatte
+			]
 		}
 	}
 }
 
 
 struct AuxiliaryMapOption: Identifiable {
+
 	let kind: AuxiliaryMapKind
-	var isEnabled: Bool
-	var scaleIndex: Int
+
+	var enabled: Bool
+
+	var scale: CGFloat
 
 	var id: AuxiliaryMapKind {
 		kind
 	}
+}
 
-	var scale: CGFloat {
-		AuxiliaryMapOption.availableScales[scaleIndex]
-	}
 
-	static let availableScales: [CGFloat] = [
-		0.10,
-		0.25,
-		0.50,
-		0.75,
-		1.0
-	]
+extension AuxiliaryMapOption {
 
 	static let defaults: [AuxiliaryMapOption] = [
 		AuxiliaryMapOption(
 			kind: .hdrGainMap,
-			isEnabled: true,
-			scaleIndex: 1
+			enabled: true,
+			scale: 0.50
 		),
+
 		AuxiliaryMapOption(
-			kind: .depth,
-			isEnabled: true,
-			scaleIndex: 1
+			kind: .depthDisparity,
+			enabled: true,
+			scale: 0.50
 		),
-		AuxiliaryMapOption(
-			kind: .disparity,
-			isEnabled: true,
-			scaleIndex: 1
-		),
+
 		AuxiliaryMapOption(
 			kind: .portraitEffectsMatte,
-			isEnabled: true,
-			scaleIndex: 1
+			enabled: true,
+			scale: 0.50
 		)
 	]
 }
