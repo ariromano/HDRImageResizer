@@ -122,7 +122,7 @@ func resizeHEIC(
 		kCGImageSourceThumbnailMaxPixelSize:
 			maximumPixelSize,
 		kCGImageSourceCreateThumbnailWithTransform:
-			true
+			false
 	]
 
 	guard let resizedImage =
@@ -148,8 +148,7 @@ func resizeHEIC(
 	outputProperties[kCGImagePropertyPixelHeight] =
 		resizedImage.height
 
-	//baking orientation
-	outputProperties[kCGImagePropertyOrientation] = 1
+	// Preserving orientation metadata instead of baking
 
 	outputProperties[
 		kCGImageDestinationLossyCompressionQuality
