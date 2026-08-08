@@ -10,23 +10,9 @@
 		FD919367301CF9DB009E661C /* HDRImageResizer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HDRImageResizer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		FDDC2C0F3022197D0092AA68 /* Exceptions for "HDRImageResizer" folder in "HDRImageResizer" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"Debug Tools/inspectImage.swift",
-				"Debug Tools/testCoreImageHDR.swift",
-			);
-			target = FD919366301CF9DB009E661C /* HDRImageResizer */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FD919369301CF9DB009E661C /* HDRImageResizer */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				FDDC2C0F3022197D0092AA68 /* Exceptions for "HDRImageResizer" folder in "HDRImageResizer" target */,
-			);
 			path = HDRImageResizer;
 			sourceTree = "<group>";
 		};
