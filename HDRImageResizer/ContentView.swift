@@ -70,9 +70,7 @@ struct ContentView: View {
 			}
 
 			VStack(spacing: 16) {
-				ForEach($auxiliaryMaps) {
-					$option in
-
+				ForEach($auxiliaryMaps) { $option in
 					auxiliaryMapControl(
 						option: $option
 					)
@@ -147,14 +145,17 @@ struct ContentView: View {
 
 	private var compressionQualityControl: some View {
 		VStack(alignment: .leading, spacing: 6) {
+
 			HStack {
 				Text("Compression quality")
 
 				Spacer()
 
-				Text("\(Int(compressionQuality * 100))%")
-					.monospacedDigit()
-					.foregroundStyle(.secondary)
+				Text(
+					"\(Int(compressionQuality * 100))%"
+				)
+				.monospacedDigit()
+				.foregroundStyle(.secondary)
 			}
 
 			Slider(
@@ -165,7 +166,9 @@ struct ContentView: View {
 
 			HStack {
 				Text("Smaller")
+
 				Spacer()
+
 				Text("Higher quality")
 			}
 			.font(.caption)
@@ -223,6 +226,7 @@ struct ContentView: View {
 				}
 
 				if option.wrappedValue.enabled {
+
 					Slider(
 						value: Binding(
 							get: {
@@ -402,6 +406,7 @@ struct ContentView: View {
 			compressionQuality
 
 		for provider in providers {
+
 			provider.loadItem(
 				forTypeIdentifier:
 					UTType.fileURL.identifier
@@ -412,6 +417,7 @@ struct ContentView: View {
 						"Error:\n"
 						+ error.localizedDescription
 					)
+
 					return
 				}
 
@@ -428,6 +434,7 @@ struct ContentView: View {
 						Could not read dropped file.
 						"""
 					)
+
 					return
 				}
 
@@ -439,33 +446,88 @@ struct ContentView: View {
 					let result: HEICResizeResult
 
 					if overwriteOriginals {
-						let temporaryURL =
-							makeTemporaryURL(
-								for: sourceURL
+
+						let sourceExtension =
+							sourceURL
+								.pathExtension
+								.lowercased()
+
+						let sourceIsHEIC =
+							sourceExtension == "heic"
+							|| sourceExtension == "heif"
+
+						if sourceIsHEIC {
+
+							let temporaryURL =
+								makeTemporaryURL(
+									for: sourceURL
+								)
+
+							result = try resizeHEIC(
+								from: sourceURL,
+								to: temporaryURL,
+								scale: imageScale,
+								compressionQuality:
+									capturedCompressionQuality,
+								auxiliaryOptions:
+									capturedAuxiliaryOptions,
+								previewDirectory:
+									previewDirectory
 							)
 
-						result = try resizeHEIC(
-							from: sourceURL,
-							to: temporaryURL,
-							scale: imageScale,
-							compressionQuality:
-								capturedCompressionQuality,
-							auxiliaryOptions:
-								capturedAuxiliaryOptions,
-							previewDirectory:
-								previewDirectory
-						)
+							try FileManager.default
+								.replaceItemAt(
+									sourceURL,
+									withItemAt:
+										temporaryURL
+								)
 
-						try FileManager.default
-							.replaceItemAt(
-								sourceURL,
-								withItemAt:
-									temporaryURL
+							finalURL = sourceURL
+
+						} else {
+
+							
+							 // resizeHEIC always creates a HEIC, so a non-HEIC source needs a new extension when overwrite mode is enabled
+
+							finalURL =
+								sourceURL
+									.deletingPathExtension()
+									.appendingPathExtension(
+										"heic"
+									)
+
+							if FileManager.default.fileExists(
+								atPath: finalURL.path
+							) {
+								try FileManager.default
+									.removeItem(
+										at: finalURL
+									)
+							}
+
+							result = try resizeHEIC(
+								from: sourceURL,
+								to: finalURL,
+								scale: imageScale,
+								compressionQuality:
+									capturedCompressionQuality,
+								auxiliaryOptions:
+									capturedAuxiliaryOptions,
+								previewDirectory:
+									previewDirectory
 							)
 
-						finalURL = sourceURL
+							/*
+							 Delete the source only after the
+							 conversion succeeded.
+							 */
+							try FileManager.default.removeItem(
+								at: sourceURL
+							)
+						}
 
 					} else {
+
 						finalURL = makeOutputURL(
 							for: sourceURL,
 							scale: imageScale
